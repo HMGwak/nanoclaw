@@ -1,6 +1,32 @@
 # NanoClaw
 
-Personal Claude assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
+Personal Claude assistant (HMGwak fork).
+
+## References
+
+| Resource | Link |
+|----------|------|
+| 공식 문서 | https://docs.nanoclaw.dev |
+| 공식 문서 인덱스 (LLM용) | https://docs.nanoclaw.dev/llms.txt |
+| 로컬 매뉴얼 | [manual.md](manual.md) |
+| 내 Fork | https://github.com/HMGwak/nanoclaw |
+| Upstream | https://github.com/qwibitai/nanoclaw |
+| Discord | https://discord.gg/VDdww8qS42 |
+
+### 공식 문서 주요 페이지
+
+- [소개](https://docs.nanoclaw.dev/introduction) | [설치](https://docs.nanoclaw.dev/installation) | [빠른 시작](https://docs.nanoclaw.dev/quickstart)
+- [아키텍처](https://docs.nanoclaw.dev/concepts/architecture) | [보안](https://docs.nanoclaw.dev/concepts/security) | [컨테이너](https://docs.nanoclaw.dev/concepts/containers) | [그룹](https://docs.nanoclaw.dev/concepts/groups) | [태스크](https://docs.nanoclaw.dev/concepts/tasks)
+- [메시징](https://docs.nanoclaw.dev/features/messaging) | [커스터마이징](https://docs.nanoclaw.dev/features/customization) | [Agent Swarms](https://docs.nanoclaw.dev/features/agent-swarms) | [웹 액세스](https://docs.nanoclaw.dev/features/web-access) | [CLI](https://docs.nanoclaw.dev/features/cli) | [스케줄 태스크](https://docs.nanoclaw.dev/features/scheduled-tasks)
+- [스킬 시스템](https://docs.nanoclaw.dev/integrations/skills-system) | [스킬 만들기](https://docs.nanoclaw.dev/api/skills/creating-skills)
+- [WhatsApp](https://docs.nanoclaw.dev/integrations/whatsapp) | [Telegram](https://docs.nanoclaw.dev/integrations/telegram) | [Discord](https://docs.nanoclaw.dev/integrations/discord) | [Slack](https://docs.nanoclaw.dev/integrations/slack) | [Gmail](https://docs.nanoclaw.dev/integrations/gmail)
+- [설정](https://docs.nanoclaw.dev/api/configuration) | [메시지 라우팅 API](https://docs.nanoclaw.dev/api/message-routing) | [그룹 관리 API](https://docs.nanoclaw.dev/api/group-management) | [태스크 API](https://docs.nanoclaw.dev/api/task-scheduling)
+- [컨테이너 런타임](https://docs.nanoclaw.dev/advanced/container-runtime) | [IPC](https://docs.nanoclaw.dev/advanced/ipc-system) | [Remote Control](https://docs.nanoclaw.dev/advanced/remote-control) | [보안 심화](https://docs.nanoclaw.dev/advanced/security-model) | [Docker Sandboxes](https://docs.nanoclaw.dev/advanced/docker-sandboxes) | [트러블슈팅](https://docs.nanoclaw.dev/advanced/troubleshooting)
+
+## Git Remotes
+
+- `origin` → `HMGwak/nanoclaw` (내 fork, push 대상)
+- `upstream` → `qwibitai/nanoclaw` (원본, pull 대상)
 
 ## Quick Context
 

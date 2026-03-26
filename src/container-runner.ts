@@ -6,6 +6,8 @@ import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
+import { getAgentBackendConfig } from './agent-backend.js';
+import { readEnvFile } from './env.js';
 import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
@@ -165,6 +167,20 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Per-group .nanoclaw directory for non-Claude backends (e.g. OpenCode session state)
+  const groupNanoClawDir = path.join(
+    DATA_DIR,
+    'sessions',
+    group.folder,
+    '.nanoclaw',
+  );
+  fs.mkdirSync(groupNanoClawDir, { recursive: true });
+  mounts.push({
+    hostPath: groupNanoClawDir,
+    containerPath: '/home/node/.nanoclaw',
+    readonly: false,
+  });
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
@@ -193,13 +209,18 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
+    // Check if any key source file is newer than the cached copy.
+    // This catches changes to index.ts, types.ts, and providers/*.
     const srcIndex = path.join(agentRunnerSrc, 'index.ts');
+    const srcTypes = path.join(agentRunnerSrc, 'types.ts');
     const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
+    const newestSrcMs = [srcIndex, srcTypes]
+      .filter((f) => fs.existsSync(f))
+      .reduce((max, f) => Math.max(max, fs.statSync(f).mtimeMs), 0);
     const needsCopy =
       !fs.existsSync(groupAgentRunnerDir) ||
       !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
+      newestSrcMs > fs.statSync(cachedIndex).mtimeMs;
     if (needsCopy) {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
@@ -229,23 +250,41 @@ async function buildContainerArgs(
   agentIdentifier?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
+  const backendConfig = getAgentBackendConfig();
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // OneCLI gateway handles credential injection — containers never see real secrets.
-  // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
-  const onecliApplied = await onecli.applyContainerConfig(args, {
-    addHostMapping: false, // Nanoclaw already handles host gateway
-    agent: agentIdentifier,
-  });
-  if (onecliApplied) {
-    logger.info({ containerName }, 'OneCLI gateway config applied');
-  } else {
-    logger.warn(
-      { containerName },
-      'OneCLI gateway not reachable — container will have no credentials',
-    );
+  // Tell the container which agent backend to use
+  args.push('-e', `NANOCLAW_AGENT_BACKEND=${backendConfig.backend}`);
+  if (backendConfig.model) {
+    args.push('-e', `AGENT_MODEL=${backendConfig.model}`);
+  }
+
+  if (backendConfig.backend === 'claude') {
+    // OneCLI gateway handles credential injection — containers never see real secrets.
+    // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
+    const onecliApplied = await onecli.applyContainerConfig(args, {
+      addHostMapping: false, // Nanoclaw already handles host gateway
+      agent: agentIdentifier,
+    });
+    if (onecliApplied) {
+      logger.info({ containerName }, 'OneCLI gateway config applied');
+    } else {
+      logger.warn(
+        { containerName },
+        'OneCLI gateway not reachable — container will have no credentials',
+      );
+    }
+  } else if (backendConfig.backend === 'opencode') {
+    // OpenCode backend: pass API key and model directly to the container.
+    // No OneCLI proxy needed for non-Anthropic providers.
+    if (backendConfig.opencodeApiKey) {
+      args.push('-e', `OPENCODE_API_KEY=${backendConfig.opencodeApiKey}`);
+    }
+    if (backendConfig.opencodeModel) {
+      args.push('-e', `OPENCODE_MODEL=${backendConfig.opencodeModel}`);
+    }
   }
 
   // Runtime-specific args for host gateway resolution
