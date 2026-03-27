@@ -6,7 +6,6 @@ import {
   TextChannel,
 } from 'discord.js';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -23,34 +22,45 @@ export interface DiscordChannelOpts {
   registeredGroups: () => Record<string, RegisteredGroup>;
 }
 
+interface BotClient {
+  client: Client;
+  token: string;
+  label: string; // e.g. "비서실", "작업실"
+  botUserId?: string;
+}
+
 export class DiscordChannel implements Channel {
   name = 'discord';
 
-  private client: Client | null = null;
+  private bots: BotClient[] = [];
   private opts: DiscordChannelOpts;
-  private botToken: string;
+  private primaryToken: string;
 
-  constructor(botToken: string, opts: DiscordChannelOpts) {
-    this.botToken = botToken;
+  constructor(primaryToken: string, opts: DiscordChannelOpts) {
+    this.primaryToken = primaryToken;
     this.opts = opts;
   }
 
-  async connect(): Promise<void> {
-    this.client = new Client({
-      intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.DirectMessages,
-      ],
-    });
+  /**
+   * Find the bot label for a given JID.
+   * JID format: "dc:channelId" (primary) or "dc:channelId:botLabel" (secondary)
+   */
+  private getBotForJid(jid: string): BotClient | undefined {
+    const parts = jid.replace(/^dc:/, '').split(':');
+    if (parts.length >= 2) {
+      // Secondary bot: dc:channelId:botLabel
+      const botLabel = parts[1];
+      return this.bots.find((b) => b.label === botLabel) || this.bots[0];
+    }
+    // Primary bot: dc:channelId
+    return this.bots[0];
+  }
 
-    this.client.on(Events.MessageCreate, async (message: Message) => {
-      // Ignore bot messages (including own)
+  private setupMessageHandler(bot: BotClient, isPrimary: boolean): void {
+    bot.client.on(Events.MessageCreate, async (message: Message) => {
       if (message.author.bot) return;
 
       const channelId = message.channelId;
-      const chatJid = `dc:${channelId}`;
       let content = message.content;
       const timestamp = message.createdAt.toISOString();
       const senderName =
@@ -60,7 +70,6 @@ export class DiscordChannel implements Channel {
       const sender = message.author.id;
       const msgId = message.id;
 
-      // Determine chat name
       let chatName: string;
       if (message.guild) {
         const textChannel = message.channel as TextChannel;
@@ -69,69 +78,111 @@ export class DiscordChannel implements Channel {
         chatName = senderName;
       }
 
-      // Translate Discord @bot mentions into TRIGGER_PATTERN format.
-      // Discord mentions look like <@botUserId> — these won't match
-      // TRIGGER_PATTERN (e.g., ^@Andy\b), so we prepend the trigger
-      // when the bot is @mentioned.
-      if (this.client?.user) {
-        const botId = this.client.user.id;
-        const isBotMentioned =
+      // Step 1: Check if THIS bot was @mentioned (user mention or managed role mention)
+      const botId = bot.client.user?.id;
+      let thisBotMentioned = false;
+      if (botId) {
+        thisBotMentioned =
           message.mentions.users.has(botId) ||
           content.includes(`<@${botId}>`) ||
-          content.includes(`<@!${botId}>`);
-
-        if (isBotMentioned) {
-          // Strip the <@botId> mention to avoid visual clutter
-          content = content
-            .replace(new RegExp(`<@!?${botId}>`, 'g'), '')
-            .trim();
-          // Prepend trigger if not already present
-          if (!TRIGGER_PATTERN.test(content)) {
-            content = `@${ASSISTANT_NAME} ${content}`;
-          }
-        }
+          content.includes(`<@!${botId}>`) ||
+          message.mentions.roles.some((role) => role.tags?.botId === botId);
       }
 
-      // Handle attachments — store placeholders so the agent knows something was sent
-      if (message.attachments.size > 0) {
-        const attachmentDescriptions = [...message.attachments.values()].map(
-          (att) => {
-            const contentType = att.contentType || '';
-            if (contentType.startsWith('image/')) {
-              return `[Image: ${att.name || 'image'}]`;
-            } else if (contentType.startsWith('video/')) {
-              return `[Video: ${att.name || 'video'}]`;
-            } else if (contentType.startsWith('audio/')) {
-              return `[Audio: ${att.name || 'audio'}]`;
-            } else {
-              return `[File: ${att.name || 'file'}]`;
-            }
-          },
-        );
-        if (content) {
-          content = `${content}\n${attachmentDescriptions.join('\n')}`;
-        } else {
-          content = attachmentDescriptions.join('\n');
-        }
-      }
-
-      // Handle reply context — include who the user is replying to
+      // Step 2: Check reply — if replying to THIS bot's message, treat as mention
+      let replyContext = '';
       if (message.reference?.messageId) {
         try {
           const repliedTo = await message.channel.messages.fetch(
             message.reference.messageId,
           );
+          if (botId && repliedTo.author.id === botId) {
+            thisBotMentioned = true;
+          }
           const replyAuthor =
             repliedTo.member?.displayName ||
             repliedTo.author.displayName ||
             repliedTo.author.username;
-          content = `[Reply to ${replyAuthor}] ${content}`;
+          replyContext = `[Reply to ${replyAuthor}]`;
         } catch {
           // Referenced message may have been deleted
         }
       }
 
-      // Store chat metadata for discovery
+      // Step 3: Determine JID
+      let chatJid: string;
+      if (isPrimary) {
+        chatJid = `dc:${channelId}`;
+      } else {
+        chatJid = `dc:${channelId}:${bot.label}`;
+      }
+
+      // Step 4: For secondary bots, only process if THIS bot was mentioned
+      if (!isPrimary && !thisBotMentioned) return;
+
+      // Step 5: For primary bot, skip if a secondary bot was mentioned instead
+      if (isPrimary) {
+        for (const otherBot of this.bots) {
+          if (otherBot === bot) continue;
+          const otherId = otherBot.client.user?.id;
+          if (
+            otherId &&
+            (message.mentions.users.has(otherId) ||
+              content.includes(`<@${otherId}>`) ||
+              content.includes(`<@!${otherId}>`) ||
+              message.mentions.roles.some(
+                (role) => role.tags?.botId === otherId,
+              ))
+          ) {
+            return; // Let the other bot handle it
+          }
+        }
+      }
+
+      // Step 6: Translate @mention to trigger format
+      if (botId && thisBotMentioned) {
+        // Remove user mentions
+        content = content.replace(new RegExp(`<@!?${botId}>`, 'g'), '').trim();
+        // Remove role mentions for this bot's managed role
+        const botRoleId = message.mentions.roles.find(
+          (r) => r.tags?.botId === botId,
+        )?.id;
+        if (botRoleId) {
+          content = content
+            .replace(new RegExp(`<@&${botRoleId}>`, 'g'), '')
+            .trim();
+        }
+        // Find the group's trigger for this bot
+        const group = this.opts.registeredGroups()[chatJid];
+        const triggerName = group?.trigger || `@${bot.label}`;
+        // Trigger at front, reply context after
+        content = replyContext
+          ? `${triggerName} ${content} ${replyContext}`
+          : `${triggerName} ${content}`;
+      } else if (replyContext) {
+        content = `${content} ${replyContext}`;
+      }
+
+      // Step 7: Handle attachments
+      if (message.attachments.size > 0) {
+        const attachmentDescriptions = [...message.attachments.values()].map(
+          (att) => {
+            const contentType = att.contentType || '';
+            if (contentType.startsWith('image/'))
+              return `[Image: ${att.name || 'image'}]`;
+            if (contentType.startsWith('video/'))
+              return `[Video: ${att.name || 'video'}]`;
+            if (contentType.startsWith('audio/'))
+              return `[Audio: ${att.name || 'audio'}]`;
+            return `[File: ${att.name || 'file'}]`;
+          },
+        );
+        content = content
+          ? `${content}\n${attachmentDescriptions.join('\n')}`
+          : attachmentDescriptions.join('\n');
+      }
+
+      // Store chat metadata
       const isGroup = message.guild !== null;
       this.opts.onChatMetadata(
         chatJid,
@@ -141,17 +192,16 @@ export class DiscordChannel implements Channel {
         isGroup,
       );
 
-      // Only deliver full message for registered groups
+      // Only deliver for registered groups
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) {
         logger.debug(
-          { chatJid, chatName },
+          { chatJid, chatName, bot: bot.label },
           'Message from unregistered Discord channel',
         );
         return;
       }
 
-      // Deliver message — startMessageLoop() will pick it up
       this.opts.onMessage(chatJid, {
         id: msgId,
         chat_jid: chatJid,
@@ -163,42 +213,115 @@ export class DiscordChannel implements Channel {
       });
 
       logger.info(
-        { chatJid, chatName, sender: senderName },
+        { chatJid, chatName, sender: senderName, bot: bot.label },
         'Discord message stored',
       );
     });
 
-    // Handle errors gracefully
-    this.client.on(Events.Error, (err) => {
-      logger.error({ err: err.message }, 'Discord client error');
-    });
-
-    return new Promise<void>((resolve) => {
-      this.client!.once(Events.ClientReady, (readyClient) => {
-        logger.info(
-          { username: readyClient.user.tag, id: readyClient.user.id },
-          'Discord bot connected',
-        );
-        console.log(`\n  Discord bot: ${readyClient.user.tag}`);
-        console.log(
-          `  Use /chatid command or check channel IDs in Discord settings\n`,
-        );
-        resolve();
-      });
-
-      this.client!.login(this.botToken);
+    bot.client.on(Events.Error, (err) => {
+      logger.error(
+        { err: err.message, bot: bot.label },
+        'Discord client error',
+      );
     });
   }
 
+  async connect(): Promise<void> {
+    // Create primary bot
+    const primaryClient = new Client({
+      intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.DirectMessages,
+      ],
+    });
+
+    const primaryBot: BotClient = {
+      client: primaryClient,
+      token: this.primaryToken,
+      label: 'primary',
+    };
+    this.bots.push(primaryBot);
+
+    // Discover additional bot tokens from env and .env file: DISCORD_BOT_TOKEN_<LABEL>
+    // Read all DISCORD_BOT_TOKEN_* from .env file
+    const envFileContent = readEnvFile([
+      'DISCORD_BOT_TOKEN_WORKSHOP',
+      'DISCORD_BOT_TOKEN_RESEARCH',
+      'DISCORD_BOT_TOKEN_SUPPORT',
+      'DISCORD_BOT_TOKEN_ADMIN',
+      'DISCORD_BOT_TOKEN_PLANNING',
+    ]);
+    const allEnv = { ...envFileContent, ...process.env };
+    for (const [key, value] of Object.entries(allEnv)) {
+      if (
+        key.startsWith('DISCORD_BOT_TOKEN_') &&
+        value &&
+        key !== 'DISCORD_BOT_TOKEN'
+      ) {
+        const label = key.replace('DISCORD_BOT_TOKEN_', '').toLowerCase();
+        const additionalClient = new Client({
+          intents: [
+            GatewayIntentBits.Guilds,
+            GatewayIntentBits.GuildMessages,
+            GatewayIntentBits.MessageContent,
+            GatewayIntentBits.DirectMessages,
+          ],
+        });
+        this.bots.push({
+          client: additionalClient,
+          token: value,
+          label,
+        });
+      }
+    }
+
+    // Setup message handlers
+    for (let i = 0; i < this.bots.length; i++) {
+      this.setupMessageHandler(this.bots[i], i === 0);
+    }
+
+    // Connect all bots
+    const connectPromises = this.bots.map(
+      (bot) =>
+        new Promise<void>((resolve) => {
+          bot.client.once(Events.ClientReady, (readyClient) => {
+            bot.botUserId = readyClient.user.id;
+            logger.info(
+              {
+                username: readyClient.user.tag,
+                id: readyClient.user.id,
+                label: bot.label,
+              },
+              'Discord bot connected',
+            );
+            console.log(
+              `\n  Discord bot: ${readyClient.user.tag} (${bot.label})`,
+            );
+            console.log(
+              `  Use /chatid command or check channel IDs in Discord settings\n`,
+            );
+            resolve();
+          });
+          bot.client.login(bot.token);
+        }),
+    );
+
+    await Promise.all(connectPromises);
+  }
+
   async sendMessage(jid: string, text: string): Promise<void> {
-    if (!this.client) {
-      logger.warn('Discord client not initialized');
+    const bot = this.getBotForJid(jid);
+    if (!bot?.client) {
+      logger.warn({ jid }, 'No Discord bot found for JID');
       return;
     }
 
     try {
-      const channelId = jid.replace(/^dc:/, '');
-      const channel = await this.client.channels.fetch(channelId);
+      // Extract channel ID from JID (dc:channelId or dc:channelId:botLabel)
+      const channelId = jid.replace(/^dc:/, '').split(':')[0];
+      const channel = await bot.client.channels.fetch(channelId);
 
       if (!channel || !('send' in channel)) {
         logger.warn({ jid }, 'Discord channel not found or not text-based');
@@ -206,8 +329,6 @@ export class DiscordChannel implements Channel {
       }
 
       const textChannel = channel as TextChannel;
-
-      // Discord has a 2000 character limit per message — split if needed
       const MAX_LENGTH = 2000;
       if (text.length <= MAX_LENGTH) {
         await textChannel.send(text);
@@ -216,14 +337,17 @@ export class DiscordChannel implements Channel {
           await textChannel.send(text.slice(i, i + MAX_LENGTH));
         }
       }
-      logger.info({ jid, length: text.length }, 'Discord message sent');
+      logger.info(
+        { jid, length: text.length, bot: bot.label },
+        'Discord message sent',
+      );
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Discord message');
     }
   }
 
   isConnected(): boolean {
-    return this.client !== null && this.client.isReady();
+    return this.bots.length > 0 && this.bots.some((b) => b.client.isReady());
   }
 
   ownsJid(jid: string): boolean {
@@ -231,18 +355,20 @@ export class DiscordChannel implements Channel {
   }
 
   async disconnect(): Promise<void> {
-    if (this.client) {
-      this.client.destroy();
-      this.client = null;
-      logger.info('Discord bot stopped');
+    for (const bot of this.bots) {
+      bot.client.destroy();
+      logger.info({ label: bot.label }, 'Discord bot stopped');
     }
+    this.bots = [];
   }
 
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
-    if (!this.client || !isTyping) return;
+    if (!isTyping) return;
+    const bot = this.getBotForJid(jid);
+    if (!bot?.client) return;
     try {
-      const channelId = jid.replace(/^dc:/, '');
-      const channel = await this.client.channels.fetch(channelId);
+      const channelId = jid.replace(/^dc:/, '').split(':')[0];
+      const channel = await bot.client.channels.fetch(channelId);
       if (channel && 'sendTyping' in channel) {
         await (channel as TextChannel).sendTyping();
       }
