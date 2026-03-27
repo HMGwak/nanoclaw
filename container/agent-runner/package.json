@@ -13,6 +13,8 @@
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@opencode-ai/sdk": "^1.3.2",
     "cron-parser": "^5.0.0",
+    "openai": "^6.33.0",
+    "playwright-core": "^1.52.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {

@@ -248,24 +248,30 @@ async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   agentIdentifier?: string,
+  group?: RegisteredGroup,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
-  const backendConfig = getAgentBackendConfig();
+  const globalConfig = getAgentBackendConfig();
+
+  // Per-group backend override from containerConfig, fallback to global
+  const groupCfg = group?.containerConfig;
+  const backend = groupCfg?.backend || globalConfig.backend;
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
   // Tell the container which agent backend to use
-  args.push('-e', `NANOCLAW_AGENT_BACKEND=${backendConfig.backend}`);
-  if (backendConfig.model) {
-    args.push('-e', `AGENT_MODEL=${backendConfig.model}`);
+  args.push('-e', `NANOCLAW_AGENT_BACKEND=${backend}`);
+
+  // Pass allowed tools list for per-group tool filtering
+  if (groupCfg?.allowedTools && groupCfg.allowedTools.length > 0) {
+    args.push('-e', `NANOCLAW_ALLOWED_TOOLS=${groupCfg.allowedTools.join(',')}`);
   }
 
-  if (backendConfig.backend === 'claude') {
+  if (backend === 'claude') {
     // OneCLI gateway handles credential injection — containers never see real secrets.
-    // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.
     const onecliApplied = await onecli.applyContainerConfig(args, {
-      addHostMapping: false, // Nanoclaw already handles host gateway
+      addHostMapping: false,
       agent: agentIdentifier,
     });
     if (onecliApplied) {
@@ -276,15 +282,25 @@ async function buildContainerArgs(
         'OneCLI gateway not reachable — container will have no credentials',
       );
     }
-  } else if (backendConfig.backend === 'opencode') {
-    // OpenCode backend: pass API key and model directly to the container.
-    // No OneCLI proxy needed for non-Anthropic providers.
-    if (backendConfig.opencodeApiKey) {
-      args.push('-e', `OPENCODE_API_KEY=${backendConfig.opencodeApiKey}`);
-    }
-    if (backendConfig.opencodeModel) {
-      args.push('-e', `OPENCODE_MODEL=${backendConfig.opencodeModel}`);
-    }
+  } else if (backend === 'opencode') {
+    const apiKey = groupCfg?.apiKey || globalConfig.opencodeApiKey;
+    const model = groupCfg?.model || globalConfig.opencodeModel;
+    if (apiKey) args.push('-e', `OPENCODE_API_KEY=${apiKey}`);
+    if (model) args.push('-e', `OPENCODE_MODEL=${model}`);
+  } else if (backend === 'openai-compat') {
+    const apiKey = groupCfg?.apiKey || globalConfig.openaiCompatApiKey;
+    const baseUrl = groupCfg?.baseUrl || globalConfig.openaiCompatBaseUrl;
+    const model = groupCfg?.model || globalConfig.openaiCompatModel;
+    if (apiKey) args.push('-e', `OPENAI_COMPAT_API_KEY=${apiKey}`);
+    if (baseUrl) args.push('-e', `OPENAI_COMPAT_BASE_URL=${baseUrl}`);
+    if (model) args.push('-e', `OPENAI_COMPAT_MODEL=${model}`);
+  } else if (backend === 'openai') {
+    const apiKey = groupCfg?.apiKey || globalConfig.openaiApiKey;
+    const baseUrl = groupCfg?.baseUrl || globalConfig.openaiBaseUrl;
+    const model = groupCfg?.model || globalConfig.openaiModel;
+    if (apiKey) args.push('-e', `OPENAI_API_KEY=${apiKey}`);
+    if (baseUrl) args.push('-e', `OPENAI_BASE_URL=${baseUrl}`);
+    if (model) args.push('-e', `OPENAI_MODEL=${model}`);
   }
 
   // Runtime-specific args for host gateway resolution
@@ -335,6 +351,7 @@ export async function runContainerAgent(
     mounts,
     containerName,
     agentIdentifier,
+    group,
   );
 
   logger.debug(

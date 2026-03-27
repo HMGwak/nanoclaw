@@ -30,6 +30,16 @@ export interface AllowedRoot {
 export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
+  /** Per-group agent backend override. Falls back to global AGENT_BACKEND. */
+  backend?: 'claude' | 'opencode' | 'openai-compat' | 'openai';
+  /** Whitelist of tool names this group can use. Undefined = all tools. */
+  allowedTools?: string[];
+  /** Per-group model override (e.g. "glm-4.7", "kimi-k2.5"). */
+  model?: string;
+  /** Per-group API key override. */
+  apiKey?: string;
+  /** Per-group base URL override (for openai-compat). */
+  baseUrl?: string;
 }
 
 export interface RegisteredGroup {
