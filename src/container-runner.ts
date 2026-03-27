@@ -265,7 +265,10 @@ async function buildContainerArgs(
 
   // Pass allowed tools list for per-group tool filtering
   if (groupCfg?.allowedTools && groupCfg.allowedTools.length > 0) {
-    args.push('-e', `NANOCLAW_ALLOWED_TOOLS=${groupCfg.allowedTools.join(',')}`);
+    args.push(
+      '-e',
+      `NANOCLAW_ALLOWED_TOOLS=${groupCfg.allowedTools.join(',')}`,
+    );
   }
 
   if (backend === 'claude') {

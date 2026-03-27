@@ -68,14 +68,19 @@ export function getAgentBackendConfig(): AgentBackendConfig {
       containerCredentialEnvVar: 'ANTHROPIC_API_KEY',
       authMode: 'api-key',
       openaiCompatApiKey:
-        process.env.OPENAI_COMPAT_API_KEY || env.OPENAI_COMPAT_API_KEY ||
-        process.env.ZAI_API_KEY || env.ZAI_API_KEY,
+        process.env.OPENAI_COMPAT_API_KEY ||
+        env.OPENAI_COMPAT_API_KEY ||
+        process.env.ZAI_API_KEY ||
+        env.ZAI_API_KEY,
       openaiCompatBaseUrl:
-        process.env.OPENAI_COMPAT_BASE_URL || env.OPENAI_COMPAT_BASE_URL ||
+        process.env.OPENAI_COMPAT_BASE_URL ||
+        env.OPENAI_COMPAT_BASE_URL ||
         'https://api.z.ai/api/paas/v4/',
       openaiCompatModel:
-        process.env.OPENAI_COMPAT_MODEL || env.OPENAI_COMPAT_MODEL ||
-        process.env.ZAI_MODEL || env.ZAI_MODEL ||
+        process.env.OPENAI_COMPAT_MODEL ||
+        env.OPENAI_COMPAT_MODEL ||
+        process.env.ZAI_MODEL ||
+        env.ZAI_MODEL ||
         'glm-5',
     };
   }
