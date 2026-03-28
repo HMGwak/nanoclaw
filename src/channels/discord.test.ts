@@ -81,6 +81,10 @@ vi.mock('discord.js', () => {
       fetch: vi.fn().mockResolvedValue({
         send: vi.fn().mockResolvedValue(undefined),
         sendTyping: vi.fn().mockResolvedValue(undefined),
+        fetchWebhooks: vi.fn().mockResolvedValue([]),
+        createWebhook: vi.fn().mockResolvedValue({
+          send: vi.fn().mockResolvedValue(undefined),
+        }),
       }),
     };
 
@@ -173,6 +177,7 @@ function createMessage(overrides: {
     },
     mentions: {
       users: mentionsMap,
+      roles: [],
     },
     attachments: overrides.attachments ?? new Map(),
     reference: overrides.reference ?? null,
@@ -396,6 +401,55 @@ describe('DiscordChannel', () => {
         'My Server #bot-chat',
         'discord',
         true,
+      );
+    });
+
+    it('allows secondary bot messages without mention when requiresTrigger is false', async () => {
+      const opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'dc:1234567890123456:workshop': {
+            name: '작업실',
+            folder: 'discord_workshop',
+            trigger: '@작업실',
+            added_at: '2024-01-01T00:00:00.000Z',
+            requiresTrigger: false,
+          },
+        })),
+      });
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      const workshopClient = {
+        eventHandlers: new Map<string, Handler[]>(),
+        user: { id: '222333444', tag: 'Workshop#1234' },
+        _ready: true,
+        on(event: string, handler: Handler) {
+          const existing = this.eventHandlers.get(event) || [];
+          existing.push(handler);
+          this.eventHandlers.set(event, existing);
+          return this;
+        },
+      };
+
+      (channel as any).bots = [
+        { client: currentClient(), token: 'test-token', label: 'primary' },
+        { client: workshopClient, token: 'secondary-token', label: 'workshop' },
+      ];
+      (channel as any).setupMessageHandler((channel as any).bots[1], false);
+
+      const msg = createMessage({
+        content: '바로 작업 시작해줘',
+        guildName: 'Test Server',
+        channelName: 'workshop',
+      });
+      const handlers = workshopClient.eventHandlers.get('messageCreate') || [];
+      for (const h of handlers) await h(msg);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'dc:1234567890123456:workshop',
+        expect.objectContaining({
+          content: '바로 작업 시작해줘',
+        }),
       );
     });
   });
@@ -698,6 +752,162 @@ describe('DiscordChannel', () => {
       expect(mockChannel.send).toHaveBeenCalledTimes(2);
       expect(mockChannel.send).toHaveBeenNthCalledWith(1, 'x'.repeat(2000));
       expect(mockChannel.send).toHaveBeenNthCalledWith(2, 'x'.repeat(1000));
+    });
+
+    it('uses webhook persona when sender is provided', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      const webhook = {
+        send: vi.fn().mockResolvedValue(undefined),
+      };
+      const mockChannel = {
+        send: vi.fn().mockResolvedValue(undefined),
+        sendTyping: vi.fn(),
+        fetchWebhooks: vi.fn().mockResolvedValue([]),
+        createWebhook: vi.fn().mockResolvedValue(webhook),
+      };
+      currentClient().channels.fetch.mockResolvedValue(mockChannel);
+
+      await channel.sendMessage('dc:1234567890123456', 'Hello from worker', {
+        sender: 'Kimi 작업자',
+      });
+
+      expect(mockChannel.createWebhook).toHaveBeenCalledWith({
+        name: 'NanoClaw Personas',
+      });
+      expect(webhook.send).toHaveBeenCalledWith({
+        content: 'Hello from worker',
+        username: 'Kimi 작업자',
+      });
+      expect(mockChannel.send).not.toHaveBeenCalled();
+    });
+
+    it('strips redundant speaker prefix from webhook persona text', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      const webhook = {
+        send: vi.fn().mockResolvedValue(undefined),
+      };
+      const mockChannel = {
+        send: vi.fn().mockResolvedValue(undefined),
+        sendTyping: vi.fn(),
+        fetchWebhooks: vi.fn().mockResolvedValue([]),
+        createWebhook: vi.fn().mockResolvedValue(webhook),
+      };
+      currentClient().channels.fetch.mockResolvedValue(mockChannel);
+
+      await channel.sendMessage(
+        'dc:1234567890123456',
+        '작업실 팀장: 안녕하세요!',
+        {
+          sender: '작업실 팀장',
+        },
+      );
+
+      expect(webhook.send).toHaveBeenCalledWith({
+        content: '안녕하세요!',
+        username: '작업실 팀장',
+      });
+    });
+
+    it('uses a real secondary bot when sender is mapped to a bot label', async () => {
+      const opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'dc:1234567890123456:workshop': {
+            name: '작업실',
+            folder: 'discord_workshop',
+            trigger: '@작업실',
+            added_at: '2024-01-01T00:00:00.000Z',
+            containerConfig: {
+              personaMode: 'bot_only' as const,
+              senderBotMap: {
+                '작업실 팀장': 'workshop',
+                키미: 'kimi',
+              },
+            },
+          },
+        })),
+      });
+      const channel = new DiscordChannel('test-token', opts);
+
+      const primaryChannel = {
+        send: vi.fn().mockResolvedValue(undefined),
+        sendTyping: vi.fn(),
+        fetchWebhooks: vi.fn().mockResolvedValue([]),
+        createWebhook: vi.fn(),
+      };
+      const kimiChannel = {
+        send: vi.fn().mockResolvedValue(undefined),
+        sendTyping: vi.fn(),
+        fetchWebhooks: vi.fn().mockResolvedValue([]),
+        createWebhook: vi.fn(),
+      };
+
+      const primaryClient = {
+        isReady: vi.fn().mockReturnValue(true),
+        channels: { fetch: vi.fn().mockResolvedValue(primaryChannel) },
+      };
+      const kimiClient = {
+        isReady: vi.fn().mockReturnValue(true),
+        channels: { fetch: vi.fn().mockResolvedValue(kimiChannel) },
+      };
+
+      (channel as any).bots = [
+        { client: primaryClient, token: 'primary-token', label: 'primary' },
+        { client: kimiClient, token: 'kimi-token', label: 'kimi' },
+      ];
+
+      await channel.sendMessage(
+        'dc:1234567890123456:workshop',
+        '키미: 실제 봇으로 말합니다.',
+        { sender: '키미' },
+      );
+
+      expect(kimiClient.channels.fetch).toHaveBeenCalledWith('1234567890123456');
+      expect(kimiChannel.send).toHaveBeenCalledWith('실제 봇으로 말합니다.');
+      expect(kimiChannel.createWebhook).not.toHaveBeenCalled();
+      expect(primaryChannel.send).not.toHaveBeenCalled();
+    });
+
+    it('does not fall back to webhook in bot_only mode', async () => {
+      const opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({
+          'dc:1234567890123456:workshop': {
+            name: '작업실',
+            folder: 'discord_workshop',
+            trigger: '@작업실',
+            added_at: '2024-01-01T00:00:00.000Z',
+            containerConfig: {
+              personaMode: 'bot_only' as const,
+            },
+          },
+        })),
+      });
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      const mockChannel = {
+        send: vi.fn().mockResolvedValue(undefined),
+        sendTyping: vi.fn(),
+        fetchWebhooks: vi.fn().mockResolvedValue([]),
+        createWebhook: vi.fn().mockResolvedValue({
+          send: vi.fn().mockResolvedValue(undefined),
+        }),
+      };
+      currentClient().channels.fetch.mockResolvedValue(mockChannel);
+
+      await channel.sendMessage(
+        'dc:1234567890123456:workshop',
+        '임시 리뷰어: 기본 봇으로 나갑니다.',
+        { sender: '임시 리뷰어' },
+      );
+
+      expect(mockChannel.createWebhook).not.toHaveBeenCalled();
+      expect(mockChannel.send).toHaveBeenCalledWith('기본 봇으로 나갑니다.');
     });
   });
 

@@ -6,6 +6,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import OpenAI from 'openai';
+import { loadSubAgentManager } from '../sub-agent-manager.js';
 import {
   agentBrowseOpen,
   agentBrowseClick,
@@ -284,6 +285,44 @@ export const allTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  // --- Sub-agents ---
+  {
+    type: 'function',
+    function: {
+      name: 'list_agents',
+      description:
+        'List available sub-agents (team members) and their roles.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'ask_agent',
+      description:
+        'Ask a sub-agent for help. Use this when you want a second opinion, implementation advice, or focused review from a team member.',
+      parameters: {
+        type: 'object',
+        properties: {
+          agent: { type: 'string', description: 'Name of the sub-agent.' },
+          prompt: {
+            type: 'string',
+            description: 'The question or task for the sub-agent.',
+          },
+          system_prompt: {
+            type: 'string',
+            description: 'Optional extra system instructions for the sub-agent.',
+          },
+        },
+        required: ['agent', 'prompt'],
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 /**
@@ -310,6 +349,10 @@ export function getToolName(tool: OpenAI.Chat.Completions.ChatCompletionTool): s
 interface ExecutorContext {
   log: (msg: string) => void;
   env: Record<string, string | undefined>;
+}
+
+function getSubAgentManager() {
+  return loadSubAgentManager();
 }
 
 async function runShell(argsJson: string, ctx: ExecutorContext): Promise<string> {
@@ -367,6 +410,63 @@ async function runWebSearch(argsJson: string, ctx: ExecutorContext): Promise<str
   return runWebFetch(JSON.stringify({ url: `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}` }), ctx);
 }
 
+async function runListAgents(ctx: ExecutorContext): Promise<string> {
+  const manager = getSubAgentManager();
+  if (!manager || manager.size === 0) {
+    return JSON.stringify({ ok: true, agents: [] });
+  }
+
+  return JSON.stringify({
+    ok: true,
+    agents: manager.listAgents(),
+  });
+}
+
+async function runAskAgent(
+  argsJson: string,
+  ctx: ExecutorContext,
+): Promise<string> {
+  let args: { agent: string; prompt: string; system_prompt?: string };
+  try {
+    args = JSON.parse(argsJson);
+  } catch {
+    return JSON.stringify({ ok: false, error: 'Invalid JSON' });
+  }
+
+  if (!args.agent?.trim()) {
+    return JSON.stringify({ ok: false, error: 'No agent specified' });
+  }
+  if (!args.prompt?.trim()) {
+    return JSON.stringify({ ok: false, error: 'No prompt provided' });
+  }
+
+  const manager = getSubAgentManager();
+  if (!manager || manager.size === 0) {
+    return JSON.stringify({ ok: false, error: 'No sub-agents configured' });
+  }
+
+  ctx.log(`ask_agent: ${args.agent}`);
+
+  try {
+    const response = await manager.askAgent(
+      args.agent,
+      args.prompt,
+      args.system_prompt,
+    );
+    return JSON.stringify({
+      ok: true,
+      agent: args.agent,
+      response,
+    });
+  } catch (err) {
+    return JSON.stringify({
+      ok: false,
+      agent: args.agent,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 function toToolCtx(ctx: ExecutorContext): ToolContext {
   return { log: ctx.log, env: ctx.env as Record<string, string | undefined> };
 }
@@ -383,6 +483,8 @@ export async function executeTool(
     case 'shell': return runShell(argsJson, ctx);
     case 'web_fetch': return runWebFetch(argsJson, ctx);
     case 'web_search': return runWebSearch(argsJson, ctx);
+    case 'list_agents': return runListAgents(ctx);
+    case 'ask_agent': return runAskAgent(argsJson, ctx);
 
     // Agent Browser tools
     case 'browse_open': {

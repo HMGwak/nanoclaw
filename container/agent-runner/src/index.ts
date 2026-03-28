@@ -20,6 +20,7 @@ import { execFile } from 'child_process';
 import { fileURLToPath } from 'url';
 
 import { getAgentProvider } from './providers/index.js';
+import { writeSubAgentConfig } from './sub-agent-manager.js';
 import { ContainerInput, ContainerOutput } from './types.js';
 
 const IPC_INPUT_DIR = '/workspace/ipc/input';
@@ -206,6 +207,14 @@ async function main(): Promise<void> {
       error: `Failed to parse input: ${err instanceof Error ? err.message : String(err)}`,
     });
     process.exit(1);
+  }
+
+  // Write sub-agent config for the MCP server before anything else
+  if (containerInput.subAgents && containerInput.subAgents.length > 0) {
+    writeSubAgentConfig(containerInput.subAgents);
+    log(
+      `Registered ${containerInput.subAgents.length} sub-agent(s): ${containerInput.subAgents.map((s) => s.name).join(', ')}`,
+    );
   }
 
   const agentEnv: Record<string, string | undefined> = { ...process.env };

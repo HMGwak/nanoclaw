@@ -22,6 +22,7 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
+import { findInstructionFile, buildTeamInfo } from '../agent-instructions.js';
 import {
   AgentProvider,
   AgentTurnContext,
@@ -75,16 +76,27 @@ function writeConfig(
         },
       },
     },
-    // Load group CLAUDE.md as instructions
-    instructions: fs.existsSync(path.join(WORK_DIR, 'CLAUDE.md'))
-      ? ['./CLAUDE.md']
-      : [],
+    // Load group instructions (AGENTS.md)
+    instructions: [] as string[],
   };
 
+  const groupInstr = findInstructionFile(WORK_DIR);
+  if (groupInstr) {
+    (config.instructions as string[]).push(groupInstr);
+  }
+
   // Also load global instructions if available
-  const globalMd = '/workspace/global/CLAUDE.md';
-  if (fs.existsSync(globalMd)) {
-    (config.instructions as string[]).push(globalMd);
+  const globalInstr = findInstructionFile('/workspace/global');
+  if (globalInstr) {
+    (config.instructions as string[]).push(globalInstr);
+  }
+
+  // Append team info as an inline instruction file if sub-agents are configured
+  const teamInfo = buildTeamInfo();
+  if (teamInfo) {
+    const teamInfoPath = path.join(CONFIG_DIR, 'team-info.md');
+    fs.writeFileSync(teamInfoPath, teamInfo);
+    (config.instructions as string[]).push(teamInfoPath);
   }
 
   const configPath = path.join(CONFIG_DIR, 'opencode.jsonc');

@@ -7,6 +7,7 @@ import {
   PreCompactHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 
+import { readInstructionFile, buildTeamInfo } from '../agent-instructions.js';
 import {
   AgentProvider,
   AgentTurnContext,
@@ -285,11 +286,15 @@ async function runClaudeTurn(
   let messageCount = 0;
   let resultCount = 0;
 
-  // Load global CLAUDE.md as additional system context (shared across all groups)
-  const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
+  // Load global instructions (AGENTS.md) + team info
   let globalClaudeMd: string | undefined;
-  if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
-    globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
+  if (!containerInput.isMain) {
+    const parts: string[] = [];
+    const globalInstr = readInstructionFile('/workspace/global');
+    if (globalInstr) parts.push(globalInstr);
+    const teamInfo = buildTeamInfo();
+    if (teamInfo) parts.push(teamInfo);
+    if (parts.length > 0) globalClaudeMd = parts.join('\n\n');
   }
 
   // Discover additional directories mounted at /workspace/extra/*

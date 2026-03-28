@@ -58,9 +58,12 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import { normalizeAgentOutputs } from './agent-output.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
+import { WorkflowEngine, WorkflowStepContext } from './workflow-engine.js';
+import { SCHEDULER_POLL_INTERVAL } from './config.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -73,6 +76,9 @@ let messageLoopRunning = false;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+
+// Workflow engine instance (initialized after queue is ready)
+let workflowEngine: WorkflowEngine | null = null;
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
@@ -135,23 +141,22 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   // Create group folder
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
 
-  // Copy CLAUDE.md template into the new group folder so agents have
+  // Copy AGENTS.md template into the new group folder so agents have
   // identity and instructions from the first run.  (Fixes #1391)
-  const groupMdFile = path.join(groupDir, 'CLAUDE.md');
+  const groupMdFile = path.join(groupDir, 'AGENTS.md');
   if (!fs.existsSync(groupMdFile)) {
-    const templateFile = path.join(
-      GROUPS_DIR,
-      group.isMain ? 'main' : 'global',
-      'CLAUDE.md',
-    );
-    if (fs.existsSync(templateFile)) {
+    const templateDir = path.join(GROUPS_DIR, group.isMain ? 'main' : 'global');
+    const templateFile = fs.existsSync(path.join(templateDir, 'AGENTS.md'))
+      ? path.join(templateDir, 'AGENTS.md')
+      : null;
+    if (templateFile) {
       let content = fs.readFileSync(templateFile, 'utf-8');
       if (ASSISTANT_NAME !== 'Andy') {
         content = content.replace(/^# Andy$/m, `# ${ASSISTANT_NAME}`);
         content = content.replace(/You are Andy/g, `You are ${ASSISTANT_NAME}`);
       }
       fs.writeFileSync(groupMdFile, content);
-      logger.info({ folder: group.folder }, 'Created CLAUDE.md from template');
+      logger.info({ folder: group.folder }, 'Created AGENTS.md from template');
     }
   }
 
@@ -265,11 +270,14 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         typeof result.result === 'string'
           ? result.result
           : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
+      const outputs = normalizeAgentOutputs(raw, group);
+      for (const output of outputs) {
+        await channel.sendMessage(chatJid, output.text, {
+          sender: output.sender,
+        });
+      }
+      if (outputs.length > 0) {
         outputSentToUser = true;
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
@@ -662,10 +670,10 @@ async function main(): Promise<void> {
     },
   });
   startIpcWatcher({
-    sendMessage: (jid, text) => {
+    sendMessage: (jid, text, opts) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      return channel.sendMessage(jid, text);
+      return channel.sendMessage(jid, text, opts);
     },
     registeredGroups: () => registeredGroups,
     registerGroup,
@@ -694,7 +702,84 @@ async function main(): Promise<void> {
         writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
       }
     },
+    onWorkflowRequested: (title, steps, sourceGroup, chatJid) => {
+      if (workflowEngine) {
+        workflowEngine
+          .requestWorkflow(title, steps, sourceGroup, chatJid)
+          .catch((err) =>
+            logger.error({ err, title }, 'Failed to create workflow'),
+          );
+      }
+    },
+    onWorkflowStepResult: (workflowId, stepIndex, status, resultSummary) => {
+      if (workflowEngine) {
+        const handler =
+          status === 'completed'
+            ? workflowEngine.onStepCompleted(workflowId, stepIndex, resultSummary)
+            : workflowEngine.onStepFailed(workflowId, stepIndex, resultSummary);
+        handler.catch((err) =>
+          logger.error({ err, workflowId, stepIndex }, 'Failed to process step result'),
+        );
+      }
+    },
+    onWorkflowCancelled: (workflowId, sourceGroup) => {
+      if (workflowEngine) {
+        workflowEngine
+          .cancelWorkflow(workflowId, sourceGroup)
+          .catch((err) =>
+            logger.error({ err, workflowId }, 'Failed to cancel workflow'),
+          );
+      }
+    },
   });
+
+  // Initialize workflow engine
+  workflowEngine = new WorkflowEngine({
+    sendMessage: async (jid, text) => {
+      const channel = findChannel(channels, jid);
+      if (channel) await channel.sendMessage(jid, text);
+    },
+    registeredGroups: () => registeredGroups,
+    enqueueWorkflowStep: (
+      groupJid: string,
+      stepId: string,
+      prompt: string,
+      _context: WorkflowStepContext,
+    ) => {
+      queue.enqueueTask(groupJid, `wf-step-${stepId}`, async () => {
+        // The workflow step runs as a regular container task
+        // The prompt includes workflow context and instructions to call report_result
+        const group = registeredGroups[groupJid];
+        if (!group) {
+          logger.error({ groupJid, stepId }, 'Workflow step target group not found');
+          return;
+        }
+        // Enqueue message check to process the workflow step prompt
+        queue.sendMessage(groupJid, prompt);
+      });
+    },
+    closeStdin: (groupJid: string) => {
+      queue.closeStdin(groupJid);
+    },
+  });
+
+  // Recover workflows on restart
+  workflowEngine.recoverOnRestart().catch((err) =>
+    logger.error({ err }, 'Failed to recover workflows on restart'),
+  );
+
+  // Periodic lease expiry check
+  setInterval(() => {
+    if (workflowEngine) {
+      workflowEngine.checkExpiredLeases().catch((err) =>
+        logger.error({ err }, 'Failed to check expired leases'),
+      );
+      workflowEngine.drainPendingSteps().catch((err) =>
+        logger.error({ err }, 'Failed to drain pending workflow steps'),
+      );
+    }
+  }, SCHEDULER_POLL_INTERVAL);
+
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
   startMessageLoop().catch((err) => {

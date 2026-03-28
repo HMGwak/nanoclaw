@@ -19,6 +19,7 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
+import { normalizeAgentOutputs } from './agent-output.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
 /**
@@ -72,7 +73,11 @@ export interface SchedulerDependencies {
     containerName: string,
     groupFolder: string,
   ) => void;
-  sendMessage: (jid: string, text: string) => Promise<void>;
+  sendMessage: (
+    jid: string,
+    text: string,
+    opts?: { sender?: string },
+  ) => Promise<void>;
 }
 
 async function runTask(
@@ -187,8 +192,12 @@ async function runTask(
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
+          const outputs = normalizeAgentOutputs(streamedOutput.result, group);
+          for (const output of outputs) {
+            await deps.sendMessage(task.chat_jid, output.text, {
+              sender: output.sender,
+            });
+          }
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {

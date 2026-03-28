@@ -29,12 +29,17 @@ interface BotClient {
   botUserId?: string;
 }
 
+interface DiscordWebhook {
+  send: (opts: { content: string; username?: string }) => Promise<unknown>;
+}
+
 export class DiscordChannel implements Channel {
   name = 'discord';
 
   private bots: BotClient[] = [];
   private opts: DiscordChannelOpts;
   private primaryToken: string;
+  private webhookCache = new Map<string, DiscordWebhook>();
 
   constructor(primaryToken: string, opts: DiscordChannelOpts) {
     this.primaryToken = primaryToken;
@@ -54,6 +59,23 @@ export class DiscordChannel implements Channel {
     }
     // Primary bot: dc:channelId
     return this.bots[0];
+  }
+
+  private getPersonaBotForSender(
+    jid: string,
+    sender?: string,
+  ): BotClient | undefined {
+    const trimmedSender = sender?.trim();
+    if (!trimmedSender) return undefined;
+    const group = this.opts.registeredGroups()[jid];
+    const mappedLabel = group?.containerConfig?.senderBotMap?.[trimmedSender];
+    if (!mappedLabel) return undefined;
+    return this.bots.find((b) => b.label === mappedLabel);
+  }
+
+  private getPersonaMode(jid: string): 'hybrid' | 'bot_only' {
+    const group = this.opts.registeredGroups()[jid];
+    return group?.containerConfig?.personaMode || 'hybrid';
   }
 
   private setupMessageHandler(bot: BotClient, isPrimary: boolean): void {
@@ -116,9 +138,12 @@ export class DiscordChannel implements Channel {
       } else {
         chatJid = `dc:${channelId}:${bot.label}`;
       }
+      const registeredGroup = this.opts.registeredGroups()[chatJid];
+      const requiresTrigger = registeredGroup?.requiresTrigger !== false;
 
-      // Step 4: For secondary bots, only process if THIS bot was mentioned
-      if (!isPrimary && !thisBotMentioned) return;
+      // Step 4: Secondary bots normally require a direct mention or reply.
+      // Dedicated channels can opt out via requiresTrigger=false.
+      if (!isPrimary && requiresTrigger && !thisBotMentioned) return;
 
       // Step 5: For primary bot, skip if a secondary bot was mentioned instead
       if (isPrimary) {
@@ -153,14 +178,21 @@ export class DiscordChannel implements Channel {
             .trim();
         }
         // Find the group's trigger for this bot
-        const group = this.opts.registeredGroups()[chatJid];
-        const triggerName = group?.trigger || `@${bot.label}`;
+        const triggerName = registeredGroup?.trigger || `@${bot.label}`;
+        const triggerPattern = new RegExp(
+          `^${triggerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\s|$)`,
+          'i',
+        );
         // Trigger at front, reply context after
-        content = replyContext
-          ? `${triggerName} ${content} ${replyContext}`
-          : `${triggerName} ${content}`;
+        if (!triggerPattern.test(content)) {
+          content = replyContext
+            ? `${triggerName} ${content} ${replyContext}`
+            : `${triggerName} ${content}`;
+        } else if (replyContext) {
+          content = `${replyContext} ${content}`;
+        }
       } else if (replyContext) {
-        content = `${content} ${replyContext}`;
+        content = `${replyContext} ${content}`;
       }
 
       // Step 7: Handle attachments
@@ -248,6 +280,7 @@ export class DiscordChannel implements Channel {
     // Read all DISCORD_BOT_TOKEN_* from .env file
     const envFileContent = readEnvFile([
       'DISCORD_BOT_TOKEN_WORKSHOP',
+      'DISCORD_BOT_TOKEN_KIMI',
       'DISCORD_BOT_TOKEN_RESEARCH',
       'DISCORD_BOT_TOKEN_SUPPORT',
       'DISCORD_BOT_TOKEN_ADMIN',
@@ -311,8 +344,45 @@ export class DiscordChannel implements Channel {
     await Promise.all(connectPromises);
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
-    const bot = this.getBotForJid(jid);
+  private async getOrCreateWebhook(
+    textChannel: TextChannel,
+    channelId: string,
+  ): Promise<DiscordWebhook | null> {
+    const cached = this.webhookCache.get(channelId);
+    if (cached) return cached;
+
+    try {
+      const existing = await textChannel.fetchWebhooks?.();
+      const reusable = existing?.find?.(
+        (hook) => hook.token != null && hook.name === 'NanoClaw Personas',
+      );
+      if (reusable) {
+        this.webhookCache.set(channelId, reusable as unknown as DiscordWebhook);
+        return reusable as unknown as DiscordWebhook;
+      }
+
+      const created = await textChannel.createWebhook?.({
+        name: 'NanoClaw Personas',
+      });
+      if (created) {
+        this.webhookCache.set(channelId, created as unknown as DiscordWebhook);
+        return created as unknown as DiscordWebhook;
+      }
+    } catch (err) {
+      logger.error({ channelId, err }, 'Failed to get or create Discord webhook');
+    }
+
+    return null;
+  }
+
+  async sendMessage(
+    jid: string,
+    text: string,
+    opts?: { sender?: string },
+  ): Promise<void> {
+    const sender = opts?.sender?.trim();
+    const personaBot = this.getPersonaBotForSender(jid, sender);
+    const bot = personaBot || this.getBotForJid(jid);
     if (!bot?.client) {
       logger.warn({ jid }, 'No Discord bot found for JID');
       return;
@@ -330,15 +400,49 @@ export class DiscordChannel implements Channel {
 
       const textChannel = channel as TextChannel;
       const MAX_LENGTH = 2000;
-      if (text.length <= MAX_LENGTH) {
-        await textChannel.send(text);
+      const normalizedText = this.normalizePersonaText(text, sender);
+      const personaMode = this.getPersonaMode(jid);
+      const webhook = sender
+        ? personaBot
+          ? null
+          : personaMode === 'hybrid'
+            ? await this.getOrCreateWebhook(textChannel, channelId)
+            : null
+        : null;
+
+      if (sender && !personaBot && personaMode === 'bot_only') {
+        logger.warn(
+          { jid, sender },
+          'Persona sender has no mapped real bot; sending through default bot',
+        );
+      }
+
+      if (webhook && sender) {
+        for (let i = 0; i < normalizedText.length; i += MAX_LENGTH) {
+          await webhook.send({
+            content: normalizedText.slice(i, i + MAX_LENGTH),
+            username: sender.slice(0, 80),
+          });
+        }
+      } else if (normalizedText.length <= MAX_LENGTH) {
+        await textChannel.send(normalizedText);
       } else {
-        for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await textChannel.send(text.slice(i, i + MAX_LENGTH));
+        for (let i = 0; i < normalizedText.length; i += MAX_LENGTH) {
+          await textChannel.send(normalizedText.slice(i, i + MAX_LENGTH));
         }
       }
       logger.info(
-        { jid, length: text.length, bot: bot.label },
+        {
+          jid,
+          length: normalizedText.length,
+          bot: bot.label,
+          sender,
+          delivery: personaBot
+            ? 'real-bot'
+            : webhook
+              ? 'webhook'
+              : 'default',
+        },
         'Discord message sent',
       );
     } catch (err) {
@@ -375,6 +479,76 @@ export class DiscordChannel implements Channel {
     } catch (err) {
       logger.debug({ jid, err }, 'Failed to send Discord typing indicator');
     }
+  }
+
+  // --- Workflow Thread Support ---
+
+  async createThread(jid: string, name: string): Promise<string | null> {
+    const bot = this.getBotForJid(jid);
+    if (!bot?.client) return null;
+    try {
+      const channelId = jid.replace(/^dc:/, '').split(':')[0];
+      const channel = await bot.client.channels.fetch(channelId);
+      if (!channel || !('threads' in channel)) return null;
+
+      const textChannel = channel as TextChannel;
+      const thread = await textChannel.threads.create({
+        name: name.slice(0, 100), // Discord thread name limit
+        autoArchiveDuration: 1440, // 24 hours
+      });
+      logger.info({ jid, threadId: thread.id, name }, 'Discord thread created');
+      return thread.id;
+    } catch (err) {
+      logger.error({ jid, err }, 'Failed to create Discord thread');
+      return null;
+    }
+  }
+
+  async sendToThread(threadId: string, text: string): Promise<void> {
+    // Use first available bot to send to thread
+    const bot = this.bots[0];
+    if (!bot?.client) return;
+    try {
+      const thread = await bot.client.channels.fetch(threadId);
+      if (!thread || !('send' in thread)) return;
+
+      const MAX_LENGTH = 2000;
+      if (text.length <= MAX_LENGTH) {
+        await (thread as TextChannel).send(text);
+      } else {
+        for (let i = 0; i < text.length; i += MAX_LENGTH) {
+          await (thread as TextChannel).send(text.slice(i, i + MAX_LENGTH));
+        }
+      }
+    } catch (err) {
+      logger.error({ threadId, err }, 'Failed to send to Discord thread');
+    }
+  }
+
+  async editMessage(
+    channelId: string,
+    messageId: string,
+    newText: string,
+  ): Promise<void> {
+    const bot = this.bots[0];
+    if (!bot?.client) return;
+    try {
+      const channel = await bot.client.channels.fetch(channelId);
+      if (!channel || !('messages' in channel)) return;
+      const msg = await (channel as TextChannel).messages.fetch(messageId);
+      if (msg.editable) {
+        await msg.edit(newText.slice(0, 2000));
+      }
+    } catch (err) {
+      logger.error({ channelId, messageId, err }, 'Failed to edit Discord message');
+    }
+  }
+
+  private normalizePersonaText(text: string, sender?: string): string {
+    if (!sender) return text;
+    const escapedSender = sender.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const prefix = new RegExp(`^\\s*${escapedSender}\\s*[:：]\\s*`, 'u');
+    return text.replace(prefix, '');
   }
 }
 

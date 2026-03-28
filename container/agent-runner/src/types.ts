@@ -1,3 +1,13 @@
+/** A secondary agent entry passed from the host. */
+export interface SubAgentEntry {
+  name: string;
+  backend: string;
+  model?: string;
+  apiKey?: string;
+  baseUrl?: string;
+  role?: string;
+}
+
 export interface ContainerInput {
   prompt: string;
   sessionId?: string;
@@ -7,6 +17,8 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  /** Sub-agents available via ask_agent MCP tool. */
+  subAgents?: SubAgentEntry[];
 }
 
 export interface ContainerOutput {

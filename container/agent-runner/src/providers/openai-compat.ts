@@ -23,6 +23,7 @@ import {
   AgentTurnContext,
   AgentTurnResult,
 } from '../types.js';
+import { buildAgentPrompt } from '../agent-instructions.js';
 import { filterTools, executeTool } from '../tools/shared.js';
 
 const DEFAULT_MODEL = 'glm-5';
@@ -59,30 +60,27 @@ function saveSessionState(sessionId: string, state: SessionState): void {
 }
 
 function buildSystemPrompt(context: AgentTurnContext): string {
-  const sections: string[] = [];
-
-  const groupClaudeMdPath = '/workspace/group/CLAUDE.md';
-  if (fs.existsSync(groupClaudeMdPath)) {
-    sections.push(fs.readFileSync(groupClaudeMdPath, 'utf-8').trim());
-  } else {
-    sections.push('You are an AI assistant. Use shell for local commands, web_fetch for known URLs, web_search for current information.');
-  }
-
-  const globalPath = '/workspace/global/CLAUDE.md';
-  if (fs.existsSync(globalPath)) {
-    sections.push(fs.readFileSync(globalPath, 'utf-8').trim());
-  }
-
-  return sections.join('\n\n');
+  return buildAgentPrompt({
+    isMain: context.containerInput.isMain,
+    defaultPrompt:
+      'You are an AI assistant. Use shell for local commands, web_fetch for known URLs, web_search for current information.',
+  });
 }
 
 async function runOpenAICompatTurn(
   context: AgentTurnContext,
 ): Promise<AgentTurnResult> {
   const sessionId = context.sessionId || crypto.randomUUID();
-  const model = context.agentEnv.OPENAI_COMPAT_MODEL || DEFAULT_MODEL;
-  const baseURL = context.agentEnv.OPENAI_COMPAT_BASE_URL || DEFAULT_BASE_URL;
-  const apiKey = context.agentEnv.OPENAI_COMPAT_API_KEY || '';
+  const model =
+    context.agentEnv.OPENAI_COMPAT_MODEL ||
+    context.agentEnv.ZAI_MODEL ||
+    DEFAULT_MODEL;
+  const baseURL =
+    context.agentEnv.OPENAI_COMPAT_BASE_URL || DEFAULT_BASE_URL;
+  const apiKey =
+    context.agentEnv.OPENAI_COMPAT_API_KEY ||
+    context.agentEnv.ZAI_API_KEY ||
+    '';
 
   context.log(`OpenAI-compat turn (session: ${sessionId}, model: ${model}, baseURL: ${baseURL})`);
 

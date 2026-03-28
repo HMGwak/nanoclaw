@@ -28,7 +28,7 @@ import {
 } from './container-runtime.js';
 import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
-import { RegisteredGroup } from './types.js';
+import { RegisteredGroup, SubAgentConfig } from './types.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
@@ -45,6 +45,15 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  /** Resolved sub-agent configs for ask_agent MCP tool. */
+  subAgents?: Array<{
+    name: string;
+    backend: string;
+    model?: string;
+    apiKey?: string;
+    baseUrl?: string;
+    role?: string;
+  }>;
 }
 
 export interface ContainerOutput {
@@ -58,6 +67,48 @@ interface VolumeMount {
   hostPath: string;
   containerPath: string;
   readonly: boolean;
+}
+
+function listRelativeFilesRecursive(rootDir: string, currentDir = rootDir): string[] {
+  const entries = fs.readdirSync(currentDir);
+  const files: string[] = [];
+
+  for (const entry of entries) {
+    const fullPath = path.join(currentDir, entry);
+    const stat = fs.statSync(fullPath);
+    if (stat.isDirectory()) {
+      files.push(...listRelativeFilesRecursive(rootDir, fullPath));
+      continue;
+    }
+    files.push(path.relative(rootDir, fullPath));
+  }
+
+  return files.sort();
+}
+
+function needsAgentRunnerRefresh(
+  sourceDir: string,
+  cachedDir: string,
+): boolean {
+  if (!fs.existsSync(cachedDir)) return true;
+
+  const sourceFiles = listRelativeFilesRecursive(sourceDir);
+  const cachedFiles = listRelativeFilesRecursive(cachedDir);
+
+  if (sourceFiles.length !== cachedFiles.length) return true;
+  const sourceSet = new Set(sourceFiles);
+  if (cachedFiles.some((file) => !sourceSet.has(file))) return true;
+
+  for (const relativePath of sourceFiles) {
+    const sourcePath = path.join(sourceDir, relativePath);
+    const cachedPath = path.join(cachedDir, relativePath);
+    if (!fs.existsSync(cachedPath)) return true;
+    if (fs.statSync(sourcePath).mtimeMs > fs.statSync(cachedPath).mtimeMs) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function buildVolumeMounts(
@@ -131,19 +182,7 @@ function buildVolumeMounts(
     fs.writeFileSync(
       settingsFile,
       JSON.stringify(
-        {
-          env: {
-            // Enable agent swarms (subagent orchestration)
-            // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
-            CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-            // Load CLAUDE.md from additional mounted directories
-            // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
-            CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-            // Enable Claude's memory feature (persists user preferences between sessions)
-            // https://code.claude.com/docs/en/memory#manage-auto-memory
-            CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
-          },
-        },
+        {},
         null,
         2,
       ) + '\n',
@@ -209,19 +248,8 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    // Check if any key source file is newer than the cached copy.
-    // This catches changes to index.ts, types.ts, and providers/*.
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
-    const srcTypes = path.join(agentRunnerSrc, 'types.ts');
-    const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
-    const newestSrcMs = [srcIndex, srcTypes]
-      .filter((f) => fs.existsSync(f))
-      .reduce((max, f) => Math.max(max, fs.statSync(f).mtimeMs), 0);
-    const needsCopy =
-      !fs.existsSync(groupAgentRunnerDir) ||
-      !fs.existsSync(cachedIndex) ||
-      newestSrcMs > fs.statSync(cachedIndex).mtimeMs;
-    if (needsCopy) {
+    if (needsAgentRunnerRefresh(agentRunnerSrc, groupAgentRunnerDir)) {
+      fs.rmSync(groupAgentRunnerDir, { recursive: true, force: true });
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
   }
@@ -242,6 +270,56 @@ function buildVolumeMounts(
   }
 
   return mounts;
+}
+
+/**
+ * Resolve sub-agent credentials using global config as fallback.
+ * Returns entries ready to be passed to the container via ContainerInput.
+ */
+function resolveSubAgentCredentials(
+  subAgents: SubAgentConfig[],
+): Array<{
+  name: string;
+  backend: string;
+  model?: string;
+  apiKey?: string;
+  baseUrl?: string;
+  role?: string;
+}> {
+  const globalConfig = getAgentBackendConfig();
+  return subAgents.map((sa) => {
+    let apiKey = sa.apiKey;
+    let baseUrl = sa.baseUrl;
+    let model = sa.model;
+
+    // Resolve fallback credentials per backend
+    switch (sa.backend) {
+      case 'opencode':
+        if (!apiKey) apiKey = globalConfig.opencodeApiKey;
+        if (!model) model = globalConfig.opencodeModel;
+        break;
+      case 'zai':
+      case 'openai-compat':
+        if (!apiKey) apiKey = globalConfig.openaiCompatApiKey;
+        if (!baseUrl) baseUrl = globalConfig.openaiCompatBaseUrl;
+        if (!model) model = globalConfig.openaiCompatModel;
+        break;
+      case 'openai':
+        if (!apiKey) apiKey = globalConfig.openaiApiKey;
+        if (!baseUrl) baseUrl = globalConfig.openaiBaseUrl;
+        if (!model) model = globalConfig.openaiModel;
+        break;
+    }
+
+    return {
+      name: sa.name,
+      backend: sa.backend,
+      model,
+      apiKey,
+      baseUrl,
+      role: sa.role,
+    };
+  });
 }
 
 async function buildContainerArgs(
@@ -290,7 +368,12 @@ async function buildContainerArgs(
     const model = groupCfg?.model || globalConfig.opencodeModel;
     if (apiKey) args.push('-e', `OPENCODE_API_KEY=${apiKey}`);
     if (model) args.push('-e', `OPENCODE_MODEL=${model}`);
-  } else if (backend === 'openai-compat') {
+    // Also pass OpenAI credentials for ask_codex tool (dual-model collaboration)
+    const openaiKey = globalConfig.openaiApiKey;
+    const openaiModel = process.env.CODEX_MODEL || 'gpt-5.4-codex';
+    if (openaiKey) args.push('-e', `OPENAI_API_KEY=${openaiKey}`);
+    args.push('-e', `CODEX_MODEL=${openaiModel}`);
+  } else if (backend === 'openai-compat' || backend === 'zai') {
     const apiKey = groupCfg?.apiKey || globalConfig.openaiCompatApiKey;
     const baseUrl = groupCfg?.baseUrl || globalConfig.openaiCompatBaseUrl;
     const model = groupCfg?.model || globalConfig.openaiCompatModel;
@@ -395,7 +478,18 @@ export async function runContainerAgent(
     let stdoutTruncated = false;
     let stderrTruncated = false;
 
-    container.stdin.write(JSON.stringify(input));
+    // Resolve sub-agent credentials and include in container input
+    const containerInput = { ...input };
+    const groupCfg = group?.containerConfig;
+    if (groupCfg?.subAgents && groupCfg.subAgents.length > 0) {
+      containerInput.subAgents = resolveSubAgentCredentials(groupCfg.subAgents);
+      logger.info(
+        { group: group!.name, count: groupCfg.subAgents.length },
+        'Passing sub-agents to container',
+      );
+    }
+
+    container.stdin.write(JSON.stringify(containerInput));
     container.stdin.end();
 
     // Streaming output: parse OUTPUT_START/END marker pairs as they arrive

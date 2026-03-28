@@ -22,6 +22,7 @@ import {
   AgentTurnContext,
   AgentTurnResult,
 } from '../types.js';
+import { buildAgentPrompt } from '../agent-instructions.js';
 import { filterTools, executeTool } from '../tools/shared.js';
 
 const DEFAULT_MODEL = 'gpt-4o';
@@ -58,27 +59,17 @@ function saveSessionState(sessionId: string, state: SessionState): void {
 }
 
 function buildSystemPrompt(context: AgentTurnContext): string {
-  const sections: string[] = [];
+  const base = buildAgentPrompt({
+    isMain: context.containerInput.isMain,
+    defaultPrompt: 'You are an AI assistant with browser automation tools.',
+  });
 
-  const groupClaudeMdPath = '/workspace/group/CLAUDE.md';
-  if (fs.existsSync(groupClaudeMdPath)) {
-    sections.push(fs.readFileSync(groupClaudeMdPath, 'utf-8').trim());
-  } else {
-    sections.push('You are an AI assistant with browser automation tools.');
-  }
-
-  const globalPath = '/workspace/global/CLAUDE.md';
-  if (fs.existsSync(globalPath)) {
-    sections.push(fs.readFileSync(globalPath, 'utf-8').trim());
-  }
-
-  sections.push(
+  return [
+    base,
     `Current group: ${context.containerInput.groupFolder}`,
     `Chat JID: ${context.containerInput.chatJid}`,
     `Is main: ${context.containerInput.isMain}`,
-  );
-
-  return sections.join('\n\n');
+  ].join('\n\n');
 }
 
 async function runOpenAITurn(

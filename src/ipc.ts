@@ -8,10 +8,15 @@ import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
-import { RegisteredGroup } from './types.js';
+import { normalizeAgentOutputs } from './agent-output.js';
+import { RegisteredGroup, WorkflowPlanStep } from './types.js';
 
 export interface IpcDeps {
-  sendMessage: (jid: string, text: string) => Promise<void>;
+  sendMessage: (
+    jid: string,
+    text: string,
+    opts?: { sender?: string },
+  ) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -23,6 +28,20 @@ export interface IpcDeps {
     registeredJids: Set<string>,
   ) => void;
   onTasksChanged: () => void;
+  // Workflow orchestration callbacks (optional — no-op if workflow engine not active)
+  onWorkflowRequested?: (
+    title: string,
+    steps: WorkflowPlanStep[],
+    sourceGroup: string,
+    chatJid: string,
+  ) => void;
+  onWorkflowStepResult?: (
+    workflowId: string,
+    stepIndex: number,
+    status: string,
+    resultSummary: string,
+  ) => void;
+  onWorkflowCancelled?: (workflowId: string, sourceGroup: string) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -81,9 +100,38 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
-                  await deps.sendMessage(data.chatJid, data.text);
+                  const outputs = targetGroup
+                    ? normalizeAgentOutputs(
+                        data.text,
+                        targetGroup,
+                        typeof data.sender === 'string'
+                          ? data.sender
+                          : undefined,
+                      )
+                    : [
+                        {
+                          text: data.text,
+                          sender:
+                            typeof data.sender === 'string'
+                              ? data.sender
+                              : undefined,
+                        },
+                      ];
+                  for (const output of outputs) {
+                    await deps.sendMessage(data.chatJid, output.text, {
+                      sender: output.sender,
+                    });
+                  }
                   logger.info(
-                    { chatJid: data.chatJid, sourceGroup },
+                    {
+                      chatJid: data.chatJid,
+                      sourceGroup,
+                      sender:
+                        typeof data.sender === 'string'
+                          ? data.sender
+                          : undefined,
+                      outputCount: outputs.length,
+                    },
                     'IPC message sent',
                   );
                 } else {
@@ -166,6 +214,7 @@ export async function processTaskIpc(
     groupFolder?: string;
     chatJid?: string;
     targetJid?: string;
+    sender?: string;
     // For register_group
     jid?: string;
     name?: string;
@@ -173,6 +222,13 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For workflow orchestration
+    title?: string;
+    steps?: unknown[];
+    workflowId?: string;
+    stepIndex?: number;
+    status?: string;
+    resultSummary?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -457,6 +513,104 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'start_workflow': {
+      // Permission: isMain or source group contains 'planning'
+      if (!isMain && !sourceGroup.includes('planning')) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized start_workflow attempt blocked',
+        );
+        break;
+      }
+      if (data.title && Array.isArray(data.steps) && data.steps.length > 0) {
+        const steps: WorkflowPlanStep[] = (
+          data.steps as Array<{
+            assignee?: string;
+            goal?: string;
+            acceptance_criteria?: string[];
+            constraints?: string[];
+          }>
+        )
+          .filter((s) => s.assignee && s.goal)
+          .map((s, i) => ({
+            step_index: i,
+            assignee: s.assignee!,
+            goal: s.goal!,
+            acceptance_criteria: s.acceptance_criteria,
+            constraints: s.constraints,
+          }));
+
+        if (steps.length > 0 && deps.onWorkflowRequested) {
+          deps.onWorkflowRequested(
+            data.title as string,
+            steps,
+            sourceGroup,
+            (data.chatJid as string) || '',
+          );
+          logger.info(
+            { sourceGroup, title: data.title, stepCount: steps.length },
+            'Workflow requested via IPC',
+          );
+        }
+      } else {
+        logger.warn(
+          { data },
+          'Invalid start_workflow request - missing title or steps',
+        );
+      }
+      break;
+    }
+
+    case 'report_result': {
+      if (
+        data.workflowId &&
+        data.stepIndex !== undefined &&
+        data.status &&
+        data.resultSummary
+      ) {
+        if (deps.onWorkflowStepResult) {
+          deps.onWorkflowStepResult(
+            data.workflowId as string,
+            data.stepIndex as number,
+            data.status as string,
+            data.resultSummary as string,
+          );
+          logger.info(
+            {
+              workflowId: data.workflowId,
+              stepIndex: data.stepIndex,
+              status: data.status,
+            },
+            'Workflow step result received via IPC',
+          );
+        }
+      } else {
+        logger.warn(
+          { data },
+          'Invalid report_result - missing required fields',
+        );
+      }
+      break;
+    }
+
+    case 'cancel_workflow': {
+      if (data.workflowId) {
+        if (deps.onWorkflowCancelled) {
+          deps.onWorkflowCancelled(
+            data.workflowId as string,
+            sourceGroup,
+          );
+          logger.info(
+            { workflowId: data.workflowId, sourceGroup },
+            'Workflow cancel requested via IPC',
+          );
+        }
+      } else {
+        logger.warn({ data }, 'Invalid cancel_workflow - missing workflowId');
+      }
+      break;
+    }
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');

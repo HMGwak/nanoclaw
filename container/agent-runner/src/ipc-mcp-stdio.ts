@@ -10,6 +10,7 @@ import { z } from 'zod';
 import fs from 'fs';
 import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
+import { loadSubAgentManager } from './sub-agent-manager.js';
 
 const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
@@ -44,7 +45,7 @@ server.tool(
   "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times.",
   {
     text: z.string().describe('The message text to send'),
-    sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.'),
+    sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). On Discord, this may appear as a webhook persona; on other channels it may be ignored.'),
   },
   async (args) => {
     const data: Record<string, string | undefined> = {
@@ -336,6 +337,176 @@ Use available_groups.json to find the JID for a group. The folder name must be c
     };
   },
 );
+
+server.tool(
+  'start_workflow',
+  'Start a workflow from the planning room. Assigns steps to workers and tracks progress end-to-end.',
+  {
+    title: z.string().describe('Workflow title'),
+    steps: z
+      .array(
+        z.object({
+          assignee: z.string().describe('The worker or role assigned to this step'),
+          goal: z.string().describe('What this step must accomplish'),
+          acceptance_criteria: z.string().optional().describe('Conditions that define success for this step'),
+          constraints: z.string().optional().describe('Constraints or guardrails for this step'),
+        }),
+      )
+      .describe('Ordered list of steps to execute'),
+  },
+  async (args) => {
+    if (!isMain && !groupFolder.includes('planning')) {
+      return {
+        content: [{ type: 'text' as const, text: 'Only the main group or a planning room can start workflows.' }],
+        isError: true,
+      };
+    }
+
+    const workflowId = `wf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const data = {
+      type: 'start_workflow',
+      workflowId,
+      title: args.title,
+      steps: args.steps,
+      groupFolder,
+      chatJid,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Workflow "${args.title}" started with ID ${workflowId} (${args.steps.length} steps).` }],
+    };
+  },
+);
+
+server.tool(
+  'report_result',
+  'Report completion or failure of a workflow step from a worker room.',
+  {
+    workflow_id: z.string().describe('The workflow ID returned by start_workflow'),
+    step_index: z.number().int().min(0).describe('Zero-based index of the completed step'),
+    status: z.enum(['completed', 'failed']).describe('Whether the step succeeded or failed'),
+    result_summary: z.string().describe('Summary of what was done or what went wrong'),
+  },
+  async (args) => {
+    const data = {
+      type: 'report_result',
+      workflowId: args.workflow_id,
+      stepIndex: args.step_index,
+      status: args.status,
+      resultSummary: args.result_summary,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Step ${args.step_index} of workflow ${args.workflow_id} reported as ${args.status}.` }],
+    };
+  },
+);
+
+server.tool(
+  'cancel_workflow',
+  'Cancel an in-progress workflow.',
+  {
+    workflow_id: z.string().describe('The workflow ID to cancel'),
+  },
+  async (args) => {
+    const data = {
+      type: 'cancel_workflow',
+      workflowId: args.workflow_id,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Workflow ${args.workflow_id} cancellation requested.` }],
+    };
+  },
+);
+
+// --- Sub-agent tools (ask_agent / list_agents) ---
+const subAgentManager = loadSubAgentManager();
+
+if (subAgentManager && subAgentManager.size > 0) {
+  const agentNames = subAgentManager
+    .listAgents()
+    .map((a) => a.name)
+    .join(', ');
+
+  server.tool(
+    'ask_agent',
+    `Ask a sub-agent (team member) for help. Available agents: ${agentNames}. Each agent is a separate AI model that can provide a different perspective, review code, or answer questions. The response is text-only (no tool access).`,
+    {
+      agent: z.string().describe(`Name of the sub-agent to ask (${agentNames})`),
+      prompt: z.string().describe('The question or request for the sub-agent'),
+      system_prompt: z
+        .string()
+        .optional()
+        .describe(
+          'Optional system prompt to set context for the sub-agent',
+        ),
+    },
+    async (args) => {
+      try {
+        const response = await subAgentManager.askAgent(
+          args.agent,
+          args.prompt,
+          args.system_prompt,
+        );
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `[${args.agent}] ${response}`,
+            },
+          ],
+        };
+      } catch (err) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Error from sub-agent: ${err instanceof Error ? err.message : String(err)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    'list_agents',
+    'List available sub-agents (team members) and their roles.',
+    {},
+    async () => {
+      const agents = subAgentManager.listAgents();
+      const lines = agents.map(
+        (a) =>
+          `- **${a.name}** (${a.backend}/${a.model || 'default'})${a.role ? ` — ${a.role}` : ''}`,
+      );
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text:
+              agents.length > 0
+                ? `Sub-agents:\n${lines.join('\n')}`
+                : 'No sub-agents configured.',
+          },
+        ],
+      };
+    },
+  );
+}
 
 // Start the stdio transport
 const transport = new StdioServerTransport();
