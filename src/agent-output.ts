@@ -40,10 +40,7 @@ function extractVisibleBlocks(
 
 function stripSpeakerPrefix(text: string, sender?: string): string {
   if (!sender) return text.trim();
-  const prefix = new RegExp(
-    `^\\s*${escapeRegex(sender)}\\s*[:：]\\s*`,
-    'u',
-  );
+  const prefix = new RegExp(`^\\s*${escapeRegex(sender)}\\s*[:：]\\s*`, 'u');
   return text.replace(prefix, '').trim();
 }
 
@@ -122,7 +119,11 @@ export function normalizeAgentOutputs(
     }));
   }
 
-  const transcript = extractSpeakerTranscript(withoutInternal, group, explicitSender);
+  const transcript = extractSpeakerTranscript(
+    withoutInternal,
+    group,
+    explicitSender,
+  );
   if (transcript.length > 0) {
     return transcript;
   }

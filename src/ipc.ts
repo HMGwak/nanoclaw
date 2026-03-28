@@ -597,10 +597,7 @@ export async function processTaskIpc(
     case 'cancel_workflow': {
       if (data.workflowId) {
         if (deps.onWorkflowCancelled) {
-          deps.onWorkflowCancelled(
-            data.workflowId as string,
-            sourceGroup,
-          );
+          deps.onWorkflowCancelled(data.workflowId as string, sourceGroup);
           logger.info(
             { workflowId: data.workflowId, sourceGroup },
             'Workflow cancel requested via IPC',

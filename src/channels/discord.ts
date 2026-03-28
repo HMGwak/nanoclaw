@@ -369,7 +369,10 @@ export class DiscordChannel implements Channel {
         return created as unknown as DiscordWebhook;
       }
     } catch (err) {
-      logger.error({ channelId, err }, 'Failed to get or create Discord webhook');
+      logger.error(
+        { channelId, err },
+        'Failed to get or create Discord webhook',
+      );
     }
 
     return null;
@@ -437,11 +440,7 @@ export class DiscordChannel implements Channel {
           length: normalizedText.length,
           bot: bot.label,
           sender,
-          delivery: personaBot
-            ? 'real-bot'
-            : webhook
-              ? 'webhook'
-              : 'default',
+          delivery: personaBot ? 'real-bot' : webhook ? 'webhook' : 'default',
         },
         'Discord message sent',
       );
@@ -540,7 +539,10 @@ export class DiscordChannel implements Channel {
         await msg.edit(newText.slice(0, 2000));
       }
     } catch (err) {
-      logger.error({ channelId, messageId, err }, 'Failed to edit Discord message');
+      logger.error(
+        { channelId, messageId, err },
+        'Failed to edit Discord message',
+      );
     }
   }
 

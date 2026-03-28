@@ -867,7 +867,9 @@ describe('DiscordChannel', () => {
         { sender: '키미' },
       );
 
-      expect(kimiClient.channels.fetch).toHaveBeenCalledWith('1234567890123456');
+      expect(kimiClient.channels.fetch).toHaveBeenCalledWith(
+        '1234567890123456',
+      );
       expect(kimiChannel.send).toHaveBeenCalledWith('실제 봇으로 말합니다.');
       expect(kimiChannel.createWebhook).not.toHaveBeenCalled();
       expect(primaryChannel.send).not.toHaveBeenCalled();

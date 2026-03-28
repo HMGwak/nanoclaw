@@ -111,6 +111,8 @@ describe('normalizeAgentOutput', () => {
   });
 
   it('returns null when only internal output remains', () => {
-    expect(normalizeAgentOutput('<internal>only internal</internal>', makeGroup())).toBeNull();
+    expect(
+      normalizeAgentOutput('<internal>only internal</internal>', makeGroup()),
+    ).toBeNull();
   });
 });
