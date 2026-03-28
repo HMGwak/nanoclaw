@@ -6,6 +6,7 @@ export interface SubAgentEntry {
   apiKey?: string;
   baseUrl?: string;
   role?: string;
+  allowedTools?: string[];
 }
 
 export interface ContainerInput {

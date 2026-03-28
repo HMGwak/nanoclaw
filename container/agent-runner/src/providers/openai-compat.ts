@@ -18,13 +18,10 @@ import fs from 'fs';
 import path from 'path';
 import OpenAI from 'openai';
 
-import {
-  AgentProvider,
-  AgentTurnContext,
-  AgentTurnResult,
-} from '../types.js';
+import { AgentProvider, AgentTurnContext, AgentTurnResult } from '../types.js';
 import { buildAgentPrompt } from '../agent-instructions.js';
-import { filterTools, executeTool } from '../tools/shared.js';
+import { runChatCompletionLoop } from './chat-loop.js';
+import { filterTools } from '../tools/catalog.js';
 
 const DEFAULT_MODEL = 'glm-5';
 const DEFAULT_BASE_URL = 'https://api.z.ai/api/paas/v4/';
@@ -63,7 +60,7 @@ function buildSystemPrompt(context: AgentTurnContext): string {
   return buildAgentPrompt({
     isMain: context.containerInput.isMain,
     defaultPrompt:
-      'You are an AI assistant. Use shell for local commands, web_fetch for known URLs, web_search for current information.',
+      'You are an AI assistant. Use shell for local commands, web_fetch for known URLs, web_search for current information, agent-browser for most interactive browsing, and Playwright only as a heavier fallback.',
   });
 }
 
@@ -75,23 +72,30 @@ async function runOpenAICompatTurn(
     context.agentEnv.OPENAI_COMPAT_MODEL ||
     context.agentEnv.ZAI_MODEL ||
     DEFAULT_MODEL;
-  const baseURL =
-    context.agentEnv.OPENAI_COMPAT_BASE_URL || DEFAULT_BASE_URL;
+  const baseURL = context.agentEnv.OPENAI_COMPAT_BASE_URL || DEFAULT_BASE_URL;
   const apiKey =
     context.agentEnv.OPENAI_COMPAT_API_KEY ||
     context.agentEnv.ZAI_API_KEY ||
     '';
 
-  context.log(`OpenAI-compat turn (session: ${sessionId}, model: ${model}, baseURL: ${baseURL})`);
+  context.log(
+    `OpenAI-compat turn (session: ${sessionId}, model: ${model}, baseURL: ${baseURL})`,
+  );
 
   if (!apiKey) {
-    context.emitOutput({ status: 'error', result: null, error: 'OPENAI_COMPAT_API_KEY is not set' });
+    context.emitOutput({
+      status: 'error',
+      result: null,
+      error: 'OPENAI_COMPAT_API_KEY is not set',
+    });
     return { closedDuringQuery: false };
   }
 
   // Tool filtering via env var
   const allowedToolsRaw = context.agentEnv.NANOCLAW_ALLOWED_TOOLS;
-  const allowedTools = allowedToolsRaw ? allowedToolsRaw.split(',').map(t => t.trim()) : undefined;
+  const allowedTools = allowedToolsRaw
+    ? allowedToolsRaw.split(',').map((t) => t.trim())
+    : undefined;
   const tools = filterTools(allowedTools);
 
   context.log(`Tools available: ${tools.length} (filtered: ${!!allowedTools})`);
@@ -109,42 +113,14 @@ async function runOpenAICompatTurn(
     }
     messages.push({ role: 'user', content: context.prompt });
 
-    let assistantText = '';
-    const execCtx = { log: context.log, env: context.agentEnv };
-
-    for (let loop = 0; loop < MAX_TOOL_LOOPS; loop++) {
-      const completion = await client.chat.completions.create({
-        model,
-        messages,
-        tools: tools.length > 0 ? tools : undefined,
-      });
-
-      const choice = completion.choices?.[0];
-      if (!choice) throw new Error('No choices in response');
-
-      context.log(`loop=${loop + 1} finish_reason=${choice.finish_reason}`);
-
-      if (choice.message.content) {
-        assistantText = choice.message.content;
-      }
-
-      if (!choice.message.tool_calls || choice.message.tool_calls.length === 0) break;
-
-      messages.push(choice.message);
-      context.log(`${choice.message.tool_calls.length} tool call(s)`);
-
-      for (const toolCall of choice.message.tool_calls) {
-        if (toolCall.type !== 'function') continue;
-        const fn = toolCall.function;
-        context.log(`  tool: ${fn.name}(${fn.arguments.slice(0, 100)})`);
-        const output = await executeTool(fn.name, fn.arguments, execCtx);
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: output,
-        });
-      }
-    }
+    const assistantText = await runChatCompletionLoop({
+      client,
+      model,
+      messages,
+      tools,
+      loopContext: { log: context.log, env: context.agentEnv },
+      maxLoops: MAX_TOOL_LOOPS,
+    });
 
     // Save history (simplified type for compat providers)
     state.history.push({ role: 'user', content: context.prompt });

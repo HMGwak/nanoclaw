@@ -9,15 +9,6 @@ function makeGroup(): RegisteredGroup {
     folder: 'discord_workshop',
     trigger: '@작업실',
     added_at: '2026-03-28T00:00:00.000Z',
-    containerConfig: {
-      leadSender: '작업실 팀장',
-      subAgents: [
-        {
-          name: '키미',
-          backend: 'opencode',
-        },
-      ],
-    },
   };
 }
 

@@ -6,6 +6,12 @@ import {
   TextChannel,
 } from 'discord.js';
 
+import {
+  loadDiscordServiceBots,
+  normalizeDiscordPersonaText,
+  resolveDiscordPersonaBotLabel,
+  resolveDiscordPersonaMode,
+} from '../services/discord/index.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -65,17 +71,15 @@ export class DiscordChannel implements Channel {
     jid: string,
     sender?: string,
   ): BotClient | undefined {
-    const trimmedSender = sender?.trim();
-    if (!trimmedSender) return undefined;
     const group = this.opts.registeredGroups()[jid];
-    const mappedLabel = group?.containerConfig?.senderBotMap?.[trimmedSender];
+    const mappedLabel = resolveDiscordPersonaBotLabel(group, sender);
     if (!mappedLabel) return undefined;
     return this.bots.find((b) => b.label === mappedLabel);
   }
 
   private getPersonaMode(jid: string): 'hybrid' | 'bot_only' {
     const group = this.opts.registeredGroups()[jid];
-    return group?.containerConfig?.personaMode || 'hybrid';
+    return resolveDiscordPersonaMode(group);
   }
 
   private setupMessageHandler(bot: BotClient, isPrimary: boolean): void {
@@ -276,38 +280,20 @@ export class DiscordChannel implements Channel {
     };
     this.bots.push(primaryBot);
 
-    // Discover additional bot tokens from env and .env file: DISCORD_BOT_TOKEN_<LABEL>
-    // Read all DISCORD_BOT_TOKEN_* from .env file
-    const envFileContent = readEnvFile([
-      'DISCORD_BOT_TOKEN_WORKSHOP',
-      'DISCORD_BOT_TOKEN_KIMI',
-      'DISCORD_BOT_TOKEN_RESEARCH',
-      'DISCORD_BOT_TOKEN_SUPPORT',
-      'DISCORD_BOT_TOKEN_ADMIN',
-      'DISCORD_BOT_TOKEN_PLANNING',
-    ]);
-    const allEnv = { ...envFileContent, ...process.env };
-    for (const [key, value] of Object.entries(allEnv)) {
-      if (
-        key.startsWith('DISCORD_BOT_TOKEN_') &&
-        value &&
-        key !== 'DISCORD_BOT_TOKEN'
-      ) {
-        const label = key.replace('DISCORD_BOT_TOKEN_', '').toLowerCase();
-        const additionalClient = new Client({
-          intents: [
-            GatewayIntentBits.Guilds,
-            GatewayIntentBits.GuildMessages,
-            GatewayIntentBits.MessageContent,
-            GatewayIntentBits.DirectMessages,
-          ],
-        });
-        this.bots.push({
-          client: additionalClient,
-          token: value,
-          label,
-        });
-      }
+    for (const additionalBot of loadDiscordServiceBots()) {
+      const additionalClient = new Client({
+        intents: [
+          GatewayIntentBits.Guilds,
+          GatewayIntentBits.GuildMessages,
+          GatewayIntentBits.MessageContent,
+          GatewayIntentBits.DirectMessages,
+        ],
+      });
+      this.bots.push({
+        client: additionalClient,
+        token: additionalBot.token,
+        label: additionalBot.label,
+      });
     }
 
     // Setup message handlers
@@ -383,9 +369,9 @@ export class DiscordChannel implements Channel {
     text: string,
     opts?: { sender?: string },
   ): Promise<void> {
-    const sender = opts?.sender?.trim();
-    const personaBot = this.getPersonaBotForSender(jid, sender);
-    const bot = personaBot || this.getBotForJid(jid);
+      const sender = opts?.sender?.trim();
+      const personaBot = this.getPersonaBotForSender(jid, sender);
+      const bot = personaBot || this.getBotForJid(jid);
     if (!bot?.client) {
       logger.warn({ jid }, 'No Discord bot found for JID');
       return;
@@ -403,7 +389,7 @@ export class DiscordChannel implements Channel {
 
       const textChannel = channel as TextChannel;
       const MAX_LENGTH = 2000;
-      const normalizedText = this.normalizePersonaText(text, sender);
+      const normalizedText = normalizeDiscordPersonaText(text, sender);
       const personaMode = this.getPersonaMode(jid);
       const webhook = sender
         ? personaBot
@@ -544,13 +530,6 @@ export class DiscordChannel implements Channel {
         'Failed to edit Discord message',
       );
     }
-  }
-
-  private normalizePersonaText(text: string, sender?: string): string {
-    if (!sender) return text;
-    const escapedSender = sender.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const prefix = new RegExp(`^\\s*${escapedSender}\\s*[:：]\\s*`, 'u');
-    return text.replace(prefix, '');
   }
 }
 

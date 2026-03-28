@@ -2,14 +2,16 @@
  * SubAgentManager — manages secondary agents (team members) within a bot.
  *
  * The primary agent can delegate to secondary agents via the ask_agent MCP tool.
- * Each secondary agent is a lightweight OpenAI-compatible chat completion call
- * (no tool access in Phase 1).
+ * Each secondary agent is an OpenAI-compatible chat completion client with its
+ * own optional tool allowlist.
  */
 
 import OpenAI from 'openai';
 import fs from 'fs';
 import path from 'path';
 
+import { runChatCompletionLoop } from './providers/chat-loop.js';
+import { filterTools } from './tools/catalog.js';
 import { SubAgentEntry } from './types.js';
 
 const SUBAGENTS_CONFIG_PATH = '/home/node/.nanoclaw/subagents.json';
@@ -19,6 +21,7 @@ interface AgentInfo {
   backend: string;
   model?: string;
   role?: string;
+  allowedTools?: string[];
 }
 
 export class SubAgentManager {
@@ -79,7 +82,7 @@ export class SubAgentManager {
 
   /**
    * Ask a secondary agent a question and get a text response.
-   * Runs a single chat completion call (no tools).
+   * Tool access is controlled by the agent's own allowlist.
    */
   async askAgent(
     name: string,
@@ -112,13 +115,28 @@ export class SubAgentManager {
 
     messages.push({ role: 'user', content: prompt });
 
-    const response = await agent.client.chat.completions.create({
+    const tools = agent.entry.allowedTools
+      ? filterTools(agent.entry.allowedTools)
+      : [];
+    const response = await runChatCompletionLoop({
+      client: agent.client,
       model: agent.model,
       messages,
-      max_tokens: 4096,
+      tools,
+      loopContext: {
+        log: () => {
+          /* sub-agent tool logs are intentionally quiet */
+        },
+        env: Object.fromEntries(
+          Object.entries(process.env).filter(
+            (entry): entry is [string, string] => typeof entry[1] === 'string',
+          ),
+        ),
+      },
+      maxLoops: 16,
     });
 
-    return response.choices[0]?.message?.content || '(no response)';
+    return response || '(no response)';
   }
 
   /** List available sub-agents with their metadata. */
@@ -128,6 +146,7 @@ export class SubAgentManager {
       backend: entry.backend,
       model: entry.model,
       role: entry.role,
+      allowedTools: entry.allowedTools,
     }));
   }
 

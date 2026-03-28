@@ -1,17 +1,17 @@
 # NanoClaw
 
-Personal Claude assistant (HMGwak fork).
+Personal containerized AI assistant fork (HMGwak fork).
 
 ## References
 
-| Resource | Link |
-|----------|------|
-| 공식 문서 | https://docs.nanoclaw.dev |
-| 공식 문서 인덱스 (LLM용) | https://docs.nanoclaw.dev/llms.txt |
-| 로컬 매뉴얼 | [manual.md](manual.md) |
-| 내 Fork | https://github.com/HMGwak/nanoclaw |
-| Upstream | https://github.com/qwibitai/nanoclaw |
-| Discord | https://discord.gg/VDdww8qS42 |
+| Resource                 | Link                                 |
+| ------------------------ | ------------------------------------ |
+| 공식 문서                | https://docs.nanoclaw.dev            |
+| 공식 문서 인덱스 (LLM용) | https://docs.nanoclaw.dev/llms.txt   |
+| 로컬 매뉴얼              | [manual.md](manual.md)               |
+| 내 Fork                  | https://github.com/HMGwak/nanoclaw   |
+| Upstream                 | https://github.com/qwibitai/nanoclaw |
+| Discord                  | https://discord.gg/VDdww8qS42        |
 
 ### 공식 문서 주요 페이지
 
@@ -30,22 +30,71 @@ Personal Claude assistant (HMGwak fork).
 
 ## Quick Context
 
-Single Node.js process with skill-based channel system. Channels (WhatsApp, Telegram, Slack, Discord, Gmail) are skills that self-register at startup. Messages route to Claude Agent SDK running in containers (Linux VMs). Each group has isolated filesystem and memory.
+Single Node.js process with skill-based channel system. Channels (WhatsApp, Telegram, Slack, Discord, Gmail) are skills that self-register at startup. Messages route to isolated container agents. Each group has isolated filesystem and memory.
+
+## Design Rules
+
+- Provider-agnostic first. New architecture must work across `openai`, `opencode`, `zai`, `openai-compat`, and `claude` unless there is a very strong reason not to.
+- Stay close to upstream NanoClaw. Prefer changes that remain understandable as user-level customization of the original repo rather than a divergent rewrite.
+- Shared behavior belongs in common runtime paths, common prompt assembly, or common container skills. Do not hide core behavior in one provider's private mechanism.
+- Claude-only design is forbidden for new work. Existing `.claude/*` paths and Claude-specific flows are legacy compatibility layers, not templates for future architecture.
+- Follow NanoClaw philosophy from `README.md`: keep the core small, understandable, and easy to customize in code. Do not add framework-like abstraction unless it clearly simplifies the system.
+- Separate core from fork-specific extensions. Multi-backend support may stay core for this fork, but Discord multi-bot behavior, workshop/planning workflow, and persona-specific room logic should live behind explicit extension boundaries.
+- Structure the fork in four layers: preserved source modules (`original_source/`), reusable SDK/agent/toolset/flow catalogs (`src/catalog/*`), service deployment (`src/services/*`), and user-local operating policy (`groups/*/AGENTS.md`).
+- Preserved source modules are not vendor dependencies. They are read-mostly source-of-truth assets used to derive agents, toolsets, and flows without losing the original reference material.
+- Service folders such as Discord or Symphony should compose existing catalog entries. They should not redefine agents, toolsets, flows, or SDK base profiles unless the change is genuinely generic and belongs back in the reusable catalog layer.
+- No patchwork architecture. Do not stack temporary routing layers, duplicate abstractions, or ad hoc compatibility shims when a direct design is possible.
+- Minimize fallbacks. Prefer one clear source of truth and one primary execution path. Add fallback behavior only when it is necessary for correctness or backwards compatibility.
+- Skills are first-class. If behavior is meant to be shared across providers, prefer the existing NanoClaw skill system and container skill source tree over inventing a parallel capability framework.
+- Keep provider-specific code narrow. Backend adapters may differ in transport or SDK usage, but they should consume the same high-level instructions, memory, and shared operational guidance whenever feasible.
+- Before changing architecture, verify it against actual repo docs and code paths, especially `README.md`, `CONTRIBUTING.md`, `src/container-runner.ts`, and `container/skills/`.
+
+## Structure
+
+```text
+nanoclaw/
+├── src/                         # Core NanoClaw runtime
+│   ├── channels/                # Generic channel transports/adapters
+│   ├── storage/                 # Generic repositories
+│   ├── workflows/               # Generic workflow engine
+│   ├── catalog/                 # Reusable SDK profiles, agents, toolsets, flows
+│   └── services/                # Service deployment layers (Discord, etc.)
+├── container/                   # Core container runtime
+│   ├── agent-runner/            # Provider/tool/MCP runtime
+│   └── skills/                  # Shared container skill source
+├── original_source/             # Preserved original modules, docs, pipelines
+└── groups/                      # User-local operating policy and room memory
+```
+
+Layer responsibilities:
+
+- `src/` and `container/` are core. Keep them generic and upstream-traceable.
+- `original_source/` preserves source-of-truth assets used to derive reusable building blocks.
+- `src/catalog/` defines reusable SDK profiles, agents, toolsets, and service-independent flows.
+- `src/services/` composes catalog entries for a concrete service such as Discord.
+- `groups/*/AGENTS.md` defines local room policy, tone, and operating rules.
+
+Allowed dependency direction:
+
+- core may not depend on service-specific room semantics
+- catalog may depend on preserved source metadata, but not on service deployment
+- services may compose catalog entries, but should not redefine them
+- groups may customize operating policy, but are not the source-of-truth for agents/toolsets/flows
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `src/index.ts` | Orchestrator: state, message loop, agent invocation |
-| `src/channels/registry.ts` | Channel registry (self-registration at startup) |
-| `src/ipc.ts` | IPC watcher and task processing |
-| `src/router.ts` | Message formatting and outbound routing |
-| `src/config.ts` | Trigger pattern, paths, intervals |
-| `src/container-runner.ts` | Spawns agent containers with mounts |
-| `src/task-scheduler.ts` | Runs scheduled tasks |
-| `src/db.ts` | SQLite operations |
-| `groups/{name}/AGENTS.md` | Per-group memory (isolated) |
-| `container/skills/` | Skills loaded inside agent containers (browser, status, formatting) |
+| File                       | Purpose                                                             |
+| -------------------------- | ------------------------------------------------------------------- |
+| `src/index.ts`             | Orchestrator: state, message loop, agent invocation                 |
+| `src/channels/registry.ts` | Channel registry (self-registration at startup)                     |
+| `src/ipc.ts`               | IPC watcher and task processing                                     |
+| `src/router.ts`            | Message formatting and outbound routing                             |
+| `src/config.ts`            | Trigger pattern, paths, intervals                                   |
+| `src/container-runner.ts`  | Spawns agent containers with mounts                                 |
+| `src/task-scheduler.ts`    | Runs scheduled tasks                                                |
+| `src/db.ts`                | SQLite operations                                                   |
+| `groups/{name}/AGENTS.md`  | Per-group memory (isolated)                                         |
+| `container/skills/`        | Skills loaded inside agent containers (browser, status, formatting) |
 
 ## Secrets / Credentials / Proxy (OneCLI)
 
@@ -60,14 +109,14 @@ Four types of skills exist in NanoClaw. See [CONTRIBUTING.md](CONTRIBUTING.md) f
 - **Operational skills** — instruction-only workflows, always on `main` (e.g. `/setup`, `/debug`)
 - **Container skills** — loaded inside agent containers at runtime (`container/skills/`)
 
-| Skill | When to Use |
-|-------|-------------|
-| `/setup` | First-time installation, authentication, service configuration |
-| `/customize` | Adding channels, integrations, changing behavior |
-| `/debug` | Container issues, logs, troubleshooting |
-| `/update-nanoclaw` | Bring upstream NanoClaw updates into a customized install |
-| `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
-| `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
+| Skill               | When to Use                                                       |
+| ------------------- | ----------------------------------------------------------------- |
+| `/setup`            | First-time installation, authentication, service configuration    |
+| `/customize`        | Adding channels, integrations, changing behavior                  |
+| `/debug`            | Container issues, logs, troubleshooting                           |
+| `/update-nanoclaw`  | Bring upstream NanoClaw updates into a customized install         |
+| `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch     |
+| `/get-qodo-rules`   | Load org- and repo-level coding rules from Qodo before code tasks |
 
 ## Contributing
 
@@ -84,6 +133,7 @@ npm run build        # Compile TypeScript
 ```
 
 Service management:
+
 ```bash
 # macOS (launchd)
 launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist

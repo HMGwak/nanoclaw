@@ -41,6 +41,8 @@ export interface SubAgentConfig {
   baseUrl?: string;
   /** Short role description shown to the primary agent (e.g., "Code reviewer"). */
   role?: string;
+  /** Optional per-agent tool allowlist. Undefined keeps the teammate text-only. */
+  allowedTools?: string[];
 }
 
 export interface ContainerConfig {
@@ -56,13 +58,22 @@ export interface ContainerConfig {
   apiKey?: string;
   /** Per-group base URL override (for openai-compat). */
   baseUrl?: string;
-  /** Optional display name for the lead agent when sending persona messages. */
+  /**
+   * Legacy compatibility override for service-specific speaker names.
+   * New source-of-truth lives in service deployment specs under `src/services/*`.
+   */
   leadSender?: string;
-  /** Map visible speaker names to real Discord bot labels (e.g. { "키미": "kimi" }). */
+  /**
+   * Legacy compatibility override for service-specific persona routing.
+   * New source-of-truth lives in service deployment specs under `src/services/*`.
+   */
   senderBotMap?: Record<string, string>;
-  /** How Discord persona messages should be delivered. */
+  /** Legacy compatibility override for service-specific delivery mode. */
   personaMode?: 'hybrid' | 'bot_only';
-  /** Sub-agents (team members) the primary agent can delegate to via ask_agent. */
+  /**
+   * Legacy compatibility override for service-specific teammate wiring.
+   * Reusable agent definitions now live in the catalog layer under `src/catalog/*`.
+   */
   subAgents?: SubAgentConfig[];
 }
 

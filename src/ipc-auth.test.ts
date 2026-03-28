@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import {
   _initTestDatabase,
@@ -675,5 +675,115 @@ describe('register_group success', () => {
     );
 
     expect(getRegisteredGroup('partial@g.us')).toBeUndefined();
+  });
+});
+
+// --- workflow IPC authorization and routing ---
+
+describe('workflow IPC handlers', () => {
+  it('planning group can start workflow', async () => {
+    const onWorkflowRequested = vi.fn();
+    await processTaskIpc(
+      {
+        type: 'start_workflow',
+        title: 'Build feature',
+        chatJid: 'other@g.us',
+        steps: [
+          {
+            assignee: 'third-group',
+            goal: 'Implement',
+            acceptance_criteria: ['tests pass'],
+          },
+        ],
+      },
+      'discord_planning',
+      false,
+      {
+        ...deps,
+        onWorkflowRequested,
+      },
+    );
+
+    expect(onWorkflowRequested).toHaveBeenCalledWith(
+      'Build feature',
+      [
+        {
+          step_index: 0,
+          assignee: 'third-group',
+          goal: 'Implement',
+          acceptance_criteria: ['tests pass'],
+          constraints: undefined,
+        },
+      ],
+      'discord_planning',
+      'other@g.us',
+    );
+  });
+
+  it('non-planning non-main group cannot start workflow', async () => {
+    const onWorkflowRequested = vi.fn();
+    await processTaskIpc(
+      {
+        type: 'start_workflow',
+        title: 'Nope',
+        chatJid: 'other@g.us',
+        steps: [{ assignee: 'third-group', goal: 'Implement' }],
+      },
+      'other-group',
+      false,
+      {
+        ...deps,
+        onWorkflowRequested,
+      },
+    );
+
+    expect(onWorkflowRequested).not.toHaveBeenCalled();
+  });
+
+  it('routes report_result and cancel_workflow callbacks', async () => {
+    const onWorkflowStepResult = vi.fn();
+    const onWorkflowCancelled = vi.fn();
+
+    await processTaskIpc(
+      {
+        type: 'report_result',
+        workflowId: 'wf-1',
+        stepIndex: 0,
+        status: 'completed',
+        resultSummary: 'done',
+      },
+      'discord_workshop',
+      false,
+      {
+        ...deps,
+        onWorkflowStepResult,
+        onWorkflowCancelled,
+      },
+    );
+
+    await processTaskIpc(
+      {
+        type: 'cancel_workflow',
+        workflowId: 'wf-1',
+      },
+      'discord_planning',
+      false,
+      {
+        ...deps,
+        onWorkflowStepResult,
+        onWorkflowCancelled,
+      },
+    );
+
+    expect(onWorkflowStepResult).toHaveBeenCalledWith(
+      'wf-1',
+      0,
+      'completed',
+      'done',
+    );
+    expect(onWorkflowCancelled).toHaveBeenCalledWith(
+      'wf-1',
+      'discord_planning',
+    );
   });
 });

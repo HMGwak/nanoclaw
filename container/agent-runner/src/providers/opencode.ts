@@ -22,7 +22,11 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-import { findInstructionFile, buildTeamInfo } from '../agent-instructions.js';
+import {
+  findInstructionFile,
+  buildSharedSkillsInfo,
+  buildTeamInfo,
+} from '../agent-instructions.js';
 import {
   AgentProvider,
   AgentTurnContext,
@@ -97,6 +101,13 @@ function writeConfig(
     const teamInfoPath = path.join(CONFIG_DIR, 'team-info.md');
     fs.writeFileSync(teamInfoPath, teamInfo);
     (config.instructions as string[]).push(teamInfoPath);
+  }
+
+  const sharedSkills = buildSharedSkillsInfo();
+  if (sharedSkills) {
+    const sharedSkillsPath = path.join(CONFIG_DIR, 'shared-skills.md');
+    fs.writeFileSync(sharedSkillsPath, sharedSkills);
+    (config.instructions as string[]).push(sharedSkillsPath);
   }
 
   const configPath = path.join(CONFIG_DIR, 'opencode.jsonc');

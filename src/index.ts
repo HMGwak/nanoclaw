@@ -33,6 +33,7 @@ import {
   getAllRegisteredGroups,
   getAllSessions,
   getAllTasks,
+  getDatabase,
   getMessagesSince,
   getNewMessages,
   getRouterState,
@@ -43,6 +44,7 @@ import {
   storeChatMetadata,
   storeMessage,
 } from './db.js';
+import { createWorkflowRepository } from './storage/workflows.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
@@ -62,7 +64,8 @@ import { normalizeAgentOutputs } from './agent-output.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
-import { WorkflowEngine, WorkflowStepContext } from './workflow-engine.js';
+import { WorkflowEngine } from './workflows/engine.js';
+import { WorkflowStepContext } from './workflows/types.js';
 import { SCHEDULER_POLL_INTERVAL } from './config.js';
 
 // Re-export for backwards compatibility during refactor
@@ -747,6 +750,7 @@ async function main(): Promise<void> {
       if (channel) await channel.sendMessage(jid, text);
     },
     registeredGroups: () => registeredGroups,
+    repository: createWorkflowRepository(getDatabase()),
     enqueueWorkflowStep: (
       groupJid: string,
       stepId: string,

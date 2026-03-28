@@ -17,13 +17,10 @@ import fs from 'fs';
 import path from 'path';
 import OpenAI from 'openai';
 
-import {
-  AgentProvider,
-  AgentTurnContext,
-  AgentTurnResult,
-} from '../types.js';
+import { AgentProvider, AgentTurnContext, AgentTurnResult } from '../types.js';
 import { buildAgentPrompt } from '../agent-instructions.js';
-import { filterTools, executeTool } from '../tools/shared.js';
+import { runChatCompletionLoop } from './chat-loop.js';
+import { filterTools } from '../tools/catalog.js';
 
 const DEFAULT_MODEL = 'gpt-4o';
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1/';
@@ -61,7 +58,8 @@ function saveSessionState(sessionId: string, state: SessionState): void {
 function buildSystemPrompt(context: AgentTurnContext): string {
   const base = buildAgentPrompt({
     isMain: context.containerInput.isMain,
-    defaultPrompt: 'You are an AI assistant with browser automation tools.',
+    defaultPrompt:
+      'You are an AI assistant with browser automation tools. Prefer web_search/web_fetch first, then agent-browser for most browsing tasks, and use Playwright only as a heavier fallback.',
   });
 
   return [
@@ -95,7 +93,9 @@ async function runOpenAITurn(
 
   // Tool filtering via env var (set by container-runner from containerConfig.allowedTools)
   const allowedToolsRaw = context.agentEnv.NANOCLAW_ALLOWED_TOOLS;
-  const allowedTools = allowedToolsRaw ? allowedToolsRaw.split(',').map(t => t.trim()) : undefined;
+  const allowedTools = allowedToolsRaw
+    ? allowedToolsRaw.split(',').map((t) => t.trim())
+    : undefined;
   const tools = filterTools(allowedTools);
 
   context.log(`Tools available: ${tools.length} (filtered: ${!!allowedTools})`);
@@ -111,42 +111,14 @@ async function runOpenAITurn(
       { role: 'user', content: context.prompt },
     ];
 
-    let assistantText = '';
-    const execCtx = { log: context.log, env: context.agentEnv };
-
-    for (let loop = 0; loop < MAX_TOOL_LOOPS; loop++) {
-      const completion = await client.chat.completions.create({
-        model,
-        messages,
-        tools: tools.length > 0 ? tools : undefined,
-      });
-
-      const choice = completion.choices?.[0];
-      if (!choice) throw new Error('No choices in completion response');
-
-      context.log(`loop=${loop + 1} finish_reason=${choice.finish_reason}`);
-
-      if (choice.message.content) {
-        assistantText = choice.message.content;
-      }
-
-      if (!choice.message.tool_calls || choice.message.tool_calls.length === 0) break;
-
-      messages.push(choice.message);
-      context.log(`${choice.message.tool_calls.length} tool call(s)`);
-
-      for (const toolCall of choice.message.tool_calls) {
-        if (toolCall.type !== 'function') continue;
-        const fn = toolCall.function;
-        context.log(`  tool: ${fn.name}(${fn.arguments.slice(0, 100)})`);
-        const output = await executeTool(fn.name, fn.arguments, execCtx);
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: output,
-        });
-      }
-    }
+    const assistantText = await runChatCompletionLoop({
+      client,
+      model,
+      messages,
+      tools,
+      loopContext: { log: context.log, env: context.agentEnv },
+      maxLoops: MAX_TOOL_LOOPS,
+    });
 
     // Save history
     state.history.push({ role: 'user', content: context.prompt });

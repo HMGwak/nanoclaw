@@ -6,6 +6,11 @@ import { CronExpressionParser } from 'cron-parser';
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import {
+  handleDiscordWorkflowCancel,
+  handleDiscordWorkflowResult,
+  handleDiscordWorkflowStart,
+} from './services/discord/index.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { normalizeAgentOutputs } from './agent-output.js';
@@ -515,97 +520,17 @@ export async function processTaskIpc(
       break;
 
     case 'start_workflow': {
-      // Permission: isMain or source group contains 'planning'
-      if (!isMain && !sourceGroup.includes('planning')) {
-        logger.warn(
-          { sourceGroup },
-          'Unauthorized start_workflow attempt blocked',
-        );
-        break;
-      }
-      if (data.title && Array.isArray(data.steps) && data.steps.length > 0) {
-        const steps: WorkflowPlanStep[] = (
-          data.steps as Array<{
-            assignee?: string;
-            goal?: string;
-            acceptance_criteria?: string[];
-            constraints?: string[];
-          }>
-        )
-          .filter((s) => s.assignee && s.goal)
-          .map((s, i) => ({
-            step_index: i,
-            assignee: s.assignee!,
-            goal: s.goal!,
-            acceptance_criteria: s.acceptance_criteria,
-            constraints: s.constraints,
-          }));
-
-        if (steps.length > 0 && deps.onWorkflowRequested) {
-          deps.onWorkflowRequested(
-            data.title as string,
-            steps,
-            sourceGroup,
-            (data.chatJid as string) || '',
-          );
-          logger.info(
-            { sourceGroup, title: data.title, stepCount: steps.length },
-            'Workflow requested via IPC',
-          );
-        }
-      } else {
-        logger.warn(
-          { data },
-          'Invalid start_workflow request - missing title or steps',
-        );
-      }
+      handleDiscordWorkflowStart(data, sourceGroup, isMain, deps);
       break;
     }
 
     case 'report_result': {
-      if (
-        data.workflowId &&
-        data.stepIndex !== undefined &&
-        data.status &&
-        data.resultSummary
-      ) {
-        if (deps.onWorkflowStepResult) {
-          deps.onWorkflowStepResult(
-            data.workflowId as string,
-            data.stepIndex as number,
-            data.status as string,
-            data.resultSummary as string,
-          );
-          logger.info(
-            {
-              workflowId: data.workflowId,
-              stepIndex: data.stepIndex,
-              status: data.status,
-            },
-            'Workflow step result received via IPC',
-          );
-        }
-      } else {
-        logger.warn(
-          { data },
-          'Invalid report_result - missing required fields',
-        );
-      }
+      handleDiscordWorkflowResult(data, deps);
       break;
     }
 
     case 'cancel_workflow': {
-      if (data.workflowId) {
-        if (deps.onWorkflowCancelled) {
-          deps.onWorkflowCancelled(data.workflowId as string, sourceGroup);
-          logger.info(
-            { workflowId: data.workflowId, sourceGroup },
-            'Workflow cancel requested via IPC',
-          );
-        }
-      } else {
-        logger.warn({ data }, 'Invalid cancel_workflow - missing workflowId');
-      }
+      handleDiscordWorkflowCancel(data, sourceGroup, deps);
       break;
     }
 

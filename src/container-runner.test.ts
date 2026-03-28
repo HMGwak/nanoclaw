@@ -97,7 +97,11 @@ vi.mock('child_process', async () => {
   };
 });
 
-import { runContainerAgent, ContainerOutput } from './container-runner.js';
+import {
+  runContainerAgent,
+  ContainerOutput,
+  resolveSubAgentCredentials,
+} from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 
 const testGroup: RegisteredGroup = {
@@ -217,5 +221,27 @@ describe('container-runner timeout behavior', () => {
     const result = await resultPromise;
     expect(result.status).toBe('success');
     expect(result.newSessionId).toBe('session-456');
+  });
+});
+
+describe('resolveSubAgentCredentials', () => {
+  it('preserves per-agent allowedTools when passing sub-agents to the container', () => {
+    const resolved = resolveSubAgentCredentials([
+      {
+        name: '키미',
+        backend: 'opencode',
+        model: 'opencode-go/kimi-k2.5',
+        allowedTools: ['web_search', 'browse_open'],
+      },
+    ]);
+
+    expect(resolved).toEqual([
+      expect.objectContaining({
+        name: '키미',
+        backend: 'opencode',
+        model: 'opencode-go/kimi-k2.5',
+        allowedTools: ['web_search', 'browse_open'],
+      }),
+    ]);
   });
 });

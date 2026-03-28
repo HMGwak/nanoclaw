@@ -29,6 +29,8 @@ import {
 import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup, SubAgentConfig } from './types.js';
+import { buildGroupAgentTeam } from './agents/index.js';
+import { resolveServiceDeployment } from './services/index.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
@@ -53,6 +55,7 @@ export interface ContainerInput {
     apiKey?: string;
     baseUrl?: string;
     role?: string;
+    allowedTools?: string[];
   }>;
 }
 
@@ -185,14 +188,14 @@ function buildVolumeMounts(
     fs.writeFileSync(settingsFile, JSON.stringify({}, null, 2) + '\n');
   }
 
-  // Sync skills from container/skills/ into each group's .claude/skills/
+  // Sync shared container skills into Claude's compatibility path.
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
-  const skillsDst = path.join(groupSessionsDir, 'skills');
+  const claudeSkillsDst = path.join(groupSessionsDir, 'skills');
   if (fs.existsSync(skillsSrc)) {
     for (const skillDir of fs.readdirSync(skillsSrc)) {
       const srcDir = path.join(skillsSrc, skillDir);
       if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
+      const dstDir = path.join(claudeSkillsDst, skillDir);
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
   }
@@ -210,6 +213,16 @@ function buildVolumeMounts(
     '.nanoclaw',
   );
   fs.mkdirSync(groupNanoClawDir, { recursive: true });
+  // Sync the same shared skills into a provider-agnostic runtime path.
+  const sharedSkillsDst = path.join(groupNanoClawDir, 'skills');
+  if (fs.existsSync(skillsSrc)) {
+    for (const skillDir of fs.readdirSync(skillsSrc)) {
+      const srcDir = path.join(skillsSrc, skillDir);
+      if (!fs.statSync(srcDir).isDirectory()) continue;
+      const dstDir = path.join(sharedSkillsDst, skillDir);
+      fs.cpSync(srcDir, dstDir, { recursive: true });
+    }
+  }
   mounts.push({
     hostPath: groupNanoClawDir,
     containerPath: '/home/node/.nanoclaw',
@@ -272,13 +285,14 @@ function buildVolumeMounts(
  * Resolve sub-agent credentials using global config as fallback.
  * Returns entries ready to be passed to the container via ContainerInput.
  */
-function resolveSubAgentCredentials(subAgents: SubAgentConfig[]): Array<{
+export function resolveSubAgentCredentials(subAgents: SubAgentConfig[]): Array<{
   name: string;
   backend: string;
   model?: string;
   apiKey?: string;
   baseUrl?: string;
   role?: string;
+  allowedTools?: string[];
 }> {
   const globalConfig = getAgentBackendConfig();
   return subAgents.map((sa) => {
@@ -312,6 +326,7 @@ function resolveSubAgentCredentials(subAgents: SubAgentConfig[]): Array<{
       apiKey,
       baseUrl,
       role: sa.role,
+      allowedTools: sa.allowedTools,
     };
   });
 }
@@ -326,6 +341,8 @@ async function buildContainerArgs(
   const globalConfig = getAgentBackendConfig();
 
   // Per-group backend override from containerConfig, fallback to global
+  const deployment = group ? resolveServiceDeployment(group) : null;
+  const runtimeCfg = deployment?.containerRuntime;
   const groupCfg = group?.containerConfig;
   const backend = groupCfg?.backend || globalConfig.backend;
 
@@ -336,10 +353,14 @@ async function buildContainerArgs(
   args.push('-e', `NANOCLAW_AGENT_BACKEND=${backend}`);
 
   // Pass allowed tools list for per-group tool filtering
-  if (groupCfg?.allowedTools && groupCfg.allowedTools.length > 0) {
+  const leadAllowedTools =
+    runtimeCfg?.allowedTools && runtimeCfg.allowedTools.length > 0
+      ? runtimeCfg.allowedTools
+      : groupCfg?.allowedTools;
+  if (leadAllowedTools && leadAllowedTools.length > 0) {
     args.push(
       '-e',
-      `NANOCLAW_ALLOWED_TOOLS=${groupCfg.allowedTools.join(',')}`,
+      `NANOCLAW_ALLOWED_TOOLS=${leadAllowedTools.join(',')}`,
     );
   }
 
@@ -474,11 +495,13 @@ export async function runContainerAgent(
 
     // Resolve sub-agent credentials and include in container input
     const containerInput = { ...input };
-    const groupCfg = group?.containerConfig;
-    if (groupCfg?.subAgents && groupCfg.subAgents.length > 0) {
-      containerInput.subAgents = resolveSubAgentCredentials(groupCfg.subAgents);
+    const groupTeam = buildGroupAgentTeam(group);
+    if (groupTeam.teammateConfigs.length > 0) {
+      containerInput.subAgents = resolveSubAgentCredentials(
+        groupTeam.teammateConfigs,
+      );
       logger.info(
-        { group: group!.name, count: groupCfg.subAgents.length },
+        { group: group!.name, count: groupTeam.teammateConfigs.length },
         'Passing sub-agents to container',
       );
     }

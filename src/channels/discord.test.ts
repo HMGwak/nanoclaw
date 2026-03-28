@@ -822,13 +822,6 @@ describe('DiscordChannel', () => {
             folder: 'discord_workshop',
             trigger: '@작업실',
             added_at: '2024-01-01T00:00:00.000Z',
-            containerConfig: {
-              personaMode: 'bot_only' as const,
-              senderBotMap: {
-                '작업실 팀장': 'workshop',
-                키미: 'kimi',
-              },
-            },
           },
         })),
       });
@@ -883,9 +876,6 @@ describe('DiscordChannel', () => {
             folder: 'discord_workshop',
             trigger: '@작업실',
             added_at: '2024-01-01T00:00:00.000Z',
-            containerConfig: {
-              personaMode: 'bot_only' as const,
-            },
           },
         })),
       });

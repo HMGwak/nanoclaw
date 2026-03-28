@@ -7,7 +7,11 @@ import {
   PreCompactHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 
-import { readInstructionFile, buildTeamInfo } from '../agent-instructions.js';
+import {
+  readInstructionFile,
+  buildSharedSkillsInfo,
+  buildTeamInfo,
+} from '../agent-instructions.js';
 import {
   AgentProvider,
   AgentTurnContext,
@@ -294,6 +298,8 @@ async function runClaudeTurn(
     if (globalInstr) parts.push(globalInstr);
     const teamInfo = buildTeamInfo();
     if (teamInfo) parts.push(teamInfo);
+    const sharedSkills = buildSharedSkillsInfo();
+    if (sharedSkills) parts.push(sharedSkills);
     if (parts.length > 0) globalClaudeMd = parts.join('\n\n');
   }
 

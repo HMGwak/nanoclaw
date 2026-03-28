@@ -1,3 +1,4 @@
+import { getConfiguredSpeakerNames, getLeadSenderName } from './agents/index.js';
 import { RegisteredGroup } from './types.js';
 
 export interface NormalizedAgentOutput {
@@ -10,11 +11,7 @@ function escapeRegex(text: string): string {
 }
 
 function configuredSpeakerNames(group: RegisteredGroup): string[] {
-  const names = [
-    group.containerConfig?.leadSender,
-    ...(group.containerConfig?.subAgents?.map((agent) => agent.name) ?? []),
-  ];
-  return names.filter((name): name is string => Boolean(name && name.trim()));
+  return getConfiguredSpeakerNames(group);
 }
 
 function stripInternalBlocks(text: string): string {
@@ -113,9 +110,9 @@ export function normalizeAgentOutputs(
     return visibleBlocks.map((block) => ({
       text: stripSpeakerPrefix(
         block.text,
-        block.sender || group.containerConfig?.leadSender,
+        block.sender || getLeadSenderName(group),
       ),
-      sender: block.sender || group.containerConfig?.leadSender,
+      sender: block.sender || getLeadSenderName(group),
     }));
   }
 
@@ -131,7 +128,7 @@ export function normalizeAgentOutputs(
   const sender =
     findSenderPrefix(withoutInternal, group) ||
     explicitSender ||
-    group.containerConfig?.leadSender;
+    getLeadSenderName(group);
   return [
     {
       text: stripSpeakerPrefix(withoutInternal, sender),
