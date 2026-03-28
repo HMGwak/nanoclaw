@@ -358,10 +358,7 @@ async function buildContainerArgs(
       ? runtimeCfg.allowedTools
       : groupCfg?.allowedTools;
   if (leadAllowedTools && leadAllowedTools.length > 0) {
-    args.push(
-      '-e',
-      `NANOCLAW_ALLOWED_TOOLS=${leadAllowedTools.join(',')}`,
-    );
+    args.push('-e', `NANOCLAW_ALLOWED_TOOLS=${leadAllowedTools.join(',')}`);
   }
 
   if (backend === 'claude') {

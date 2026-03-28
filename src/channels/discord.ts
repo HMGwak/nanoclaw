@@ -369,9 +369,9 @@ export class DiscordChannel implements Channel {
     text: string,
     opts?: { sender?: string },
   ): Promise<void> {
-      const sender = opts?.sender?.trim();
-      const personaBot = this.getPersonaBotForSender(jid, sender);
-      const bot = personaBot || this.getBotForJid(jid);
+    const sender = opts?.sender?.trim();
+    const personaBot = this.getPersonaBotForSender(jid, sender);
+    const bot = personaBot || this.getBotForJid(jid);
     if (!bot?.client) {
       logger.warn({ jid }, 'No Discord bot found for JID');
       return;

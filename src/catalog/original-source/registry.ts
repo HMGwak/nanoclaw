@@ -30,7 +30,9 @@ export function listOriginalSourceManifests(): OriginalSourceManifest[] {
 export function getOriginalSourceManifest(
   id: string,
 ): OriginalSourceManifest | null {
-  return listOriginalSourceManifests().find((manifest) => manifest.id === id) || null;
+  return (
+    listOriginalSourceManifests().find((manifest) => manifest.id === id) || null
+  );
 }
 
 export function hasOriginalSourceManifest(id: string): boolean {

@@ -1,4 +1,7 @@
-import { getConfiguredSpeakerNames, getLeadSenderName } from './agents/index.js';
+import {
+  getConfiguredSpeakerNames,
+  getLeadSenderName,
+} from './agents/index.js';
 import { RegisteredGroup } from './types.js';
 
 export interface NormalizedAgentOutput {

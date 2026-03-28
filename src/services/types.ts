@@ -20,6 +20,12 @@ export interface ResolvedServiceDeployment {
   canStartWorkflow: boolean;
   containerRuntime: Pick<
     ContainerConfig,
-    'additionalMounts' | 'timeout' | 'backend' | 'allowedTools' | 'model' | 'apiKey' | 'baseUrl'
+    | 'additionalMounts'
+    | 'timeout'
+    | 'backend'
+    | 'allowedTools'
+    | 'model'
+    | 'apiKey'
+    | 'baseUrl'
   >;
 }

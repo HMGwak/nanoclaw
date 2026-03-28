@@ -67,11 +67,9 @@ describe('discord workflow service handlers', () => {
       },
       { onWorkflowStepResult },
     );
-    handleDiscordWorkflowCancel(
-      { workflowId: 'wf-123' },
-      'discord_planning',
-      { onWorkflowCancelled },
-    );
+    handleDiscordWorkflowCancel({ workflowId: 'wf-123' }, 'discord_planning', {
+      onWorkflowCancelled,
+    });
 
     expect(onWorkflowStepResult).toHaveBeenCalledWith(
       'wf-123',

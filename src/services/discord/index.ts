@@ -13,9 +13,7 @@ export {
   handleDiscordWorkflowResult,
   handleDiscordWorkflowStart,
 } from './workflow.js';
-export type {
-  AdditionalDiscordBotConfig,
-} from './bots.js';
+export type { AdditionalDiscordBotConfig } from './bots.js';
 export type { DiscordServiceDeploymentSpec } from './types.js';
 export type {
   DiscordWorkflowIpcDeps,

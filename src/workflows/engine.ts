@@ -25,7 +25,8 @@ export class WorkflowEngine {
 
   constructor(deps: WorkflowEngineDeps) {
     this.deps = deps;
-    this.repository = deps.repository ?? createWorkflowRepository(getDatabase());
+    this.repository =
+      deps.repository ?? createWorkflowRepository(getDatabase());
   }
 
   /**
@@ -125,7 +126,10 @@ export class WorkflowEngine {
     await this.startNextStep(workflowId);
   }
 
-  async cancelWorkflow(workflowId: string, sourceGroup?: string): Promise<void> {
+  async cancelWorkflow(
+    workflowId: string,
+    sourceGroup?: string,
+  ): Promise<void> {
     const workflow = this.repository.getWorkflow(workflowId);
     if (!workflow) {
       logger.warn({ workflowId }, 'Cannot cancel: workflow not found');

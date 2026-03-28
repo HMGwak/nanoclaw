@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  PLANNING_WORKSHOP_FLOW,
-  parsePlanningWorkshopSteps,
-} from './index.js';
+import { PLANNING_WORKSHOP_FLOW, parsePlanningWorkshopSteps } from './index.js';
 
 describe('planning-workshop flow', () => {
   it('defines the reusable planning-workshop flow stages', () => {

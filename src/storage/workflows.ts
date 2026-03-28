@@ -73,9 +73,9 @@ export function createWorkflowRepository(db: Database.Database) {
       }
 
       vals.push(id);
-      db.prepare(`UPDATE workflow_runs SET ${sets.join(', ')} WHERE id = ?`).run(
-        ...vals,
-      );
+      db.prepare(
+        `UPDATE workflow_runs SET ${sets.join(', ')} WHERE id = ?`,
+      ).run(...vals);
     },
 
     getWorkflowsByStatus(status: WorkflowStatus): WorkflowRun[] {
@@ -106,7 +106,9 @@ export function createWorkflowRepository(db: Database.Database) {
         data.assigneeGroupFolder,
         data.assigneeChatJid,
         data.goal,
-        data.acceptanceCriteria ? JSON.stringify(data.acceptanceCriteria) : null,
+        data.acceptanceCriteria
+          ? JSON.stringify(data.acceptanceCriteria)
+          : null,
         data.constraints ? JSON.stringify(data.constraints) : null,
         now,
         now,
@@ -116,9 +118,9 @@ export function createWorkflowRepository(db: Database.Database) {
     },
 
     getWorkflowStep(id: string): WorkflowStepRun | undefined {
-      return db.prepare('SELECT * FROM workflow_step_runs WHERE id = ?').get(
-        id,
-      ) as WorkflowStepRun | undefined;
+      return db
+        .prepare('SELECT * FROM workflow_step_runs WHERE id = ?')
+        .get(id) as WorkflowStepRun | undefined;
     },
 
     getWorkflowSteps(workflowId: string): WorkflowStepRun[] {

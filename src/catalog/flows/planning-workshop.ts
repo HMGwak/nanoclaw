@@ -11,7 +11,8 @@ export const PLANNING_WORKSHOP_FLOW: FlowSpec = {
     {
       id: 'plan',
       title: 'Plan',
-      description: 'Prepare a stepwise plan with assignees and acceptance criteria.',
+      description:
+        'Prepare a stepwise plan with assignees and acceptance criteria.',
     },
     {
       id: 'confirm',
@@ -31,7 +32,9 @@ export const PLANNING_WORKSHOP_FLOW: FlowSpec = {
   ],
 };
 
-export function parsePlanningWorkshopSteps(steps: unknown[]): WorkflowPlanStep[] {
+export function parsePlanningWorkshopSteps(
+  steps: unknown[],
+): WorkflowPlanStep[] {
   return (
     steps as Array<{
       assignee?: string;

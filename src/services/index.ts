@@ -3,10 +3,15 @@ import { getSdkProfileSpec } from '../catalog/sdk-profiles/index.js';
 import { getToolsetSpec } from '../catalog/toolsets/index.js';
 import { RegisteredGroup } from '../types.js';
 import { getDiscordDeploymentForGroup } from './discord/deployments.js';
-import { ResolvedAgentRuntimeSpec, ResolvedServiceDeployment } from './types.js';
+import {
+  ResolvedAgentRuntimeSpec,
+  ResolvedServiceDeployment,
+} from './types.js';
 
 function unique(values: string[]): string[] {
-  return values.filter((value, index) => value && values.indexOf(value) === index);
+  return values.filter(
+    (value, index) => value && values.indexOf(value) === index,
+  );
 }
 
 function mergeAllowedTools(toolsetIds: string[]): string[] | undefined {
@@ -49,9 +54,10 @@ export function resolveServiceDeployment(
     .filter((agent): agent is ResolvedAgentRuntimeSpec => agent !== null);
 
   const speakerNames = unique(
-    [lead?.displayName || group.name, ...teammates.map((agent) => agent.displayName)].filter(
-      Boolean,
-    ) as string[],
+    [
+      lead?.displayName || group.name,
+      ...teammates.map((agent) => agent.displayName),
+    ].filter(Boolean) as string[],
   );
 
   return {

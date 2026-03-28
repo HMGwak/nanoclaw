@@ -36,10 +36,7 @@ export function handleDiscordWorkflowStart(
   deps: DiscordWorkflowIpcDeps,
 ): void {
   if (!canStartWorkflowFromGroup(sourceGroup, isMain)) {
-    logger.warn(
-      { sourceGroup },
-      'Unauthorized start_workflow attempt blocked',
-    );
+    logger.warn({ sourceGroup }, 'Unauthorized start_workflow attempt blocked');
     return;
   }
 
@@ -56,12 +53,7 @@ export function handleDiscordWorkflowStart(
     return;
   }
 
-  deps.onWorkflowRequested(
-    data.title,
-    steps,
-    sourceGroup,
-    data.chatJid || '',
-  );
+  deps.onWorkflowRequested(data.title, steps, sourceGroup, data.chatJid || '');
   logger.info(
     { sourceGroup, title: data.title, stepCount: steps.length },
     'Workflow requested via Discord service IPC',
