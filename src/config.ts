@@ -59,6 +59,10 @@ export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
 );
+export const MAX_WORKFLOW_CONTAINERS = Math.max(
+  1,
+  parseInt(process.env.MAX_WORKFLOW_CONTAINERS || '2', 10) || 2,
+);
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

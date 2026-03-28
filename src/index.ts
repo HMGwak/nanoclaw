@@ -715,10 +715,17 @@ async function main(): Promise<void> {
       if (workflowEngine) {
         const handler =
           status === 'completed'
-            ? workflowEngine.onStepCompleted(workflowId, stepIndex, resultSummary)
+            ? workflowEngine.onStepCompleted(
+                workflowId,
+                stepIndex,
+                resultSummary,
+              )
             : workflowEngine.onStepFailed(workflowId, stepIndex, resultSummary);
         handler.catch((err) =>
-          logger.error({ err, workflowId, stepIndex }, 'Failed to process step result'),
+          logger.error(
+            { err, workflowId, stepIndex },
+            'Failed to process step result',
+          ),
         );
       }
     },
@@ -751,7 +758,10 @@ async function main(): Promise<void> {
         // The prompt includes workflow context and instructions to call report_result
         const group = registeredGroups[groupJid];
         if (!group) {
-          logger.error({ groupJid, stepId }, 'Workflow step target group not found');
+          logger.error(
+            { groupJid, stepId },
+            'Workflow step target group not found',
+          );
           return;
         }
         // Enqueue message check to process the workflow step prompt
@@ -764,19 +774,25 @@ async function main(): Promise<void> {
   });
 
   // Recover workflows on restart
-  workflowEngine.recoverOnRestart().catch((err) =>
-    logger.error({ err }, 'Failed to recover workflows on restart'),
-  );
+  workflowEngine
+    .recoverOnRestart()
+    .catch((err) =>
+      logger.error({ err }, 'Failed to recover workflows on restart'),
+    );
 
   // Periodic lease expiry check
   setInterval(() => {
     if (workflowEngine) {
-      workflowEngine.checkExpiredLeases().catch((err) =>
-        logger.error({ err }, 'Failed to check expired leases'),
-      );
-      workflowEngine.drainPendingSteps().catch((err) =>
-        logger.error({ err }, 'Failed to drain pending workflow steps'),
-      );
+      workflowEngine
+        .checkExpiredLeases()
+        .catch((err) =>
+          logger.error({ err }, 'Failed to check expired leases'),
+        );
+      workflowEngine
+        .drainPendingSteps()
+        .catch((err) =>
+          logger.error({ err }, 'Failed to drain pending workflow steps'),
+        );
     }
   }, SCHEDULER_POLL_INTERVAL);
 

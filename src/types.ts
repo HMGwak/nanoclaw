@@ -193,7 +193,11 @@ export interface Channel {
   // Optional: workflow thread support (Discord).
   createThread?(jid: string, name: string): Promise<string | null>;
   sendToThread?(threadId: string, text: string): Promise<void>;
-  editMessage?(channelId: string, messageId: string, newText: string): Promise<void>;
+  editMessage?(
+    channelId: string,
+    messageId: string,
+    newText: string,
+  ): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

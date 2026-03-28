@@ -6,10 +6,10 @@
 
 ## 1. 개요
 
-NanoClaw는 **단일 Node.js 프로세스**로 동작하는 개인용 Claude 어시스턴트다. 메시징 채널(Discord, WhatsApp, Telegram, Slack, Gmail)에서 메시지를 수신하고, 각 그룹별로 **격리된 Linux 컨테이너** 안에서 Claude Agent SDK를 실행한 뒤, 응답을 다시 채널로 보낸다.
+NanoClaw는 **단일 Node.js 프로세스**로 동작하는 개인용 컨테이너형 AI 어시스턴트다. 메시징 채널(Discord, WhatsApp, Telegram, Slack, Gmail)에서 메시지를 수신하고, 각 그룹별로 **격리된 Linux 컨테이너** 안에서 선택한 에이전트 백엔드를 실행한 뒤, 응답을 다시 채널로 보낸다.
 
 ```
-[Channels] → [SQLite DB] → [Polling Loop] → [Container (Claude Agent SDK)] → [Response]
+[Channels] → [SQLite DB] → [Polling Loop] → [Container (Agent Runner)] → [Response]
 ```
 
 ### 핵심 설계 원칙
@@ -284,7 +284,7 @@ data/sessions/{folder}/agent-runner-src/ → /app/src           (읽기+쓰기)
 ### 6.2 보안 모델
 
 - `.env` 파일은 `/dev/null`로 마운트하여 컨테이너에서 접근 불가
-- 크레덴셜은 OneCLI 게이트웨이가 런타임에 주입
+- Claude 백엔드는 OneCLI 게이트웨이로, 나머지 백엔드는 호스트가 읽은 자격증명을 환경변수로 전달
 - IPC 디렉토리 경로로 그룹 ID 확인 (파일 내용이 아님)
 - main 그룹만 `register_group`, `refresh_groups` 가능
 - 비-main 그룹은 자기 그룹의 태스크만 조작 가능
@@ -293,16 +293,23 @@ data/sessions/{folder}/agent-runner-src/ → /app/src           (읽기+쓰기)
 ### 6.3 에이전트 백엔드
 
 ```typescript
-type AgentBackend = 'claude' | 'opencode' | 'openai-compat';
+type AgentBackend =
+  | 'openai'
+  | 'opencode'
+  | 'zai'
+  | 'openai-compat'
+  | 'claude';
 ```
 
 | 백엔드 | 크레덴셜 | 용도 |
 |--------|----------|------|
-| `claude` (기본) | OneCLI 게이트웨이 | Anthropic API, Claude Code |
+| `openai` (기본) | `OPENAI_API_KEY` | OpenAI API |
 | `opencode` | `OPENCODE_API_KEY` + `OPENCODE_MODEL` | OpenCode Go SDK (kimi-k2.5 등) |
-| `openai-compat` | `OPENAI_COMPAT_API_KEY` + `OPENAI_COMPAT_BASE_URL` | OpenAI 호환 API (z.ai 등) |
+| `zai` | `ZAI_API_KEY` + `ZAI_MODEL` | Z.AI / GLM |
+| `openai-compat` | `OPENAI_COMPAT_API_KEY` + `OPENAI_COMPAT_BASE_URL` | 기타 OpenAI 호환 API |
+| `claude` | OneCLI 게이트웨이 | Anthropic API, Claude Code |
 
-`.env`의 `AGENT_BACKEND` 또는 그룹별 `containerConfig.backend`로 설정.
+`AGENT_BACKEND`를 지정하지 않으면 `openai -> opencode -> zai -> openai-compat -> claude` 순으로 자동 감지한다. 그룹별 `containerConfig.backend`로도 override 가능.
 
 ### 6.4 컨테이너 출력 파싱
 
@@ -399,7 +406,7 @@ context_mode:
 
 ---
 
-## 10. 그룹 등록과 CLAUDE.md
+## 10. 그룹 등록과 AGENTS.md
 
 ### 그룹 등록 시
 
@@ -407,9 +414,9 @@ context_mode:
 registerGroup(jid, group):
   1. resolveGroupFolderPath()로 경로 검증
   2. groups/{folder}/logs/ 디렉토리 생성
-  3. groups/{folder}/CLAUDE.md 없으면 템플릿 복사:
-     ├── main 그룹: groups/main/CLAUDE.md
-     └── 일반 그룹: groups/global/CLAUDE.md
+  3. groups/{folder}/AGENTS.md 없으면 템플릿 복사:
+     ├── main 그룹: groups/main/AGENTS.md
+     └── 일반 그룹: groups/global/AGENTS.md
   4. ASSISTANT_NAME이 'Andy'가 아니면 템플릿 내 이름 치환
   5. OneCLI 에이전트 생성 (비동기, best-effort)
   6. DB에 저장
@@ -420,11 +427,11 @@ registerGroup(jid, group):
 ```
 groups/
 ├── main/           # 메인 채널 (관리자)
-│   └── CLAUDE.md   # 메인 그룹 에이전트 지시사항
+│   └── AGENTS.md   # 메인 그룹 에이전트 지시사항
 ├── global/         # 공용 템플릿
-│   └── CLAUDE.md   # 일반 그룹에 복사되는 템플릿
+│   └── AGENTS.md   # 일반 그룹에 복사되는 템플릿
 └── discord_general/  # 등록된 그룹 예시
-    ├── CLAUDE.md   # 이 그룹 전용 메모리
+    ├── AGENTS.md   # 이 그룹 전용 메모리
     └── logs/       # 컨테이너 실행 로그
 ```
 
@@ -466,7 +473,7 @@ nanoclaw/
 │   ├── ipc.ts                # 호스트측 IPC 파일 감시
 │   ├── task-scheduler.ts     # 스케줄 태스크 실행
 │   ├── db.ts                 # SQLite 데이터베이스 (메시지, 세션, 그룹, 태스크)
-│   ├── agent-backend.ts      # 에이전트 백엔드 설정 (claude/opencode/openai-compat)
+│   ├── agent-backend.ts      # 에이전트 백엔드 설정 (openai/opencode/zai/openai-compat/claude)
 │   ├── mount-security.ts     # 마운트 allowlist 검증
 │   ├── sender-allowlist.ts   # 발신자 허용 목록
 │   ├── remote-control.ts     # 원격 제어 세션
@@ -476,7 +483,7 @@ nanoclaw/
 │   │   └── ipc-mcp-stdio.ts  # 컨테이너 내 MCP 서버 (send_message, schedule_task 등)
 │   ├── skills/               # 컨테이너 안에서 로드되는 스킬
 │   └── build.sh              # 컨테이너 이미지 빌드
-├── groups/                   # 그룹별 디렉토리 (CLAUDE.md, logs/)
+├── groups/                   # 그룹별 디렉토리 (AGENTS.md, logs/)
 ├── data/
 │   ├── sessions/             # 그룹별 Claude 세션 (.claude/, agent-runner-src/)
 │   └── ipc/                  # IPC 파일 (messages/, tasks/, input/)

@@ -59,7 +59,7 @@ If the merge reports conflicts, resolve them by reading the conflicted files and
 
 ### Add email handling instructions (Channel mode only)
 
-If the user chose channel mode, append the following to `groups/main/CLAUDE.md` (before the formatting section):
+If the user chose channel mode, append the following to `groups/main/AGENTS.md` (before the formatting section):
 
 ```markdown
 ## Email Notifications

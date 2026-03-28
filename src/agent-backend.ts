@@ -1,6 +1,11 @@
 import { readEnvFile } from './env.js';
 
-export type AgentBackend = 'claude' | 'opencode' | 'openai-compat' | 'openai';
+export type AgentBackend =
+  | 'openai'
+  | 'opencode'
+  | 'zai'
+  | 'openai-compat'
+  | 'claude';
 
 export interface AgentBackendConfig {
   backend: AgentBackend;
@@ -21,6 +26,47 @@ export interface AgentBackendConfig {
   openaiApiKey?: string;
   openaiBaseUrl?: string;
   openaiModel?: string;
+}
+
+function hasValue(value: string | undefined): boolean {
+  return Boolean(value && value.trim());
+}
+
+function detectDefaultBackend(env: Record<string, string>): AgentBackend {
+  if (hasValue(process.env.OPENAI_API_KEY) || hasValue(env.OPENAI_API_KEY)) {
+    return 'openai';
+  }
+
+  if (
+    hasValue(process.env.OPENCODE_API_KEY) ||
+    hasValue(env.OPENCODE_API_KEY)
+  ) {
+    return 'opencode';
+  }
+
+  if (hasValue(process.env.ZAI_API_KEY) || hasValue(env.ZAI_API_KEY)) {
+    return 'zai';
+  }
+
+  if (
+    hasValue(process.env.OPENAI_COMPAT_API_KEY) ||
+    hasValue(env.OPENAI_COMPAT_API_KEY)
+  ) {
+    return 'openai-compat';
+  }
+
+  if (
+    hasValue(process.env.ANTHROPIC_API_KEY) ||
+    hasValue(env.ANTHROPIC_API_KEY) ||
+    hasValue(process.env.CLAUDE_CODE_OAUTH_TOKEN) ||
+    hasValue(env.CLAUDE_CODE_OAUTH_TOKEN) ||
+    hasValue(process.env.ANTHROPIC_AUTH_TOKEN) ||
+    hasValue(env.ANTHROPIC_AUTH_TOKEN)
+  ) {
+    return 'claude';
+  }
+
+  return 'openai';
 }
 
 export function getAgentBackendConfig(): AgentBackendConfig {
@@ -45,7 +91,7 @@ export function getAgentBackendConfig(): AgentBackendConfig {
   const requestedBackend = (
     process.env.AGENT_BACKEND ||
     env.AGENT_BACKEND ||
-    'claude'
+    detectDefaultBackend(env)
   ).toLowerCase();
 
   if (requestedBackend === 'opencode') {
@@ -60,9 +106,9 @@ export function getAgentBackendConfig(): AgentBackendConfig {
     };
   }
 
-  if (requestedBackend === 'openai-compat') {
+  if (requestedBackend === 'openai-compat' || requestedBackend === 'zai') {
     return {
-      backend: 'openai-compat',
+      backend: requestedBackend === 'zai' ? 'zai' : 'openai-compat',
       upstreamBaseUrl: '',
       containerBaseUrlEnvVar: 'ANTHROPIC_BASE_URL',
       containerCredentialEnvVar: 'ANTHROPIC_API_KEY',
@@ -100,7 +146,7 @@ export function getAgentBackendConfig(): AgentBackendConfig {
 
   if (requestedBackend !== 'claude') {
     throw new Error(
-      `Unsupported AGENT_BACKEND "${requestedBackend}". Expected "claude", "opencode", "openai-compat", or "openai".`,
+      `Unsupported AGENT_BACKEND "${requestedBackend}". Expected "openai", "opencode", "zai", "openai-compat", or "claude".`,
     );
   }
 

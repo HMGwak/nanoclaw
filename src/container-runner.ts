@@ -69,7 +69,10 @@ interface VolumeMount {
   readonly: boolean;
 }
 
-function listRelativeFilesRecursive(rootDir: string, currentDir = rootDir): string[] {
+function listRelativeFilesRecursive(
+  rootDir: string,
+  currentDir = rootDir,
+): string[] {
   const entries = fs.readdirSync(currentDir);
   const files: string[] = [];
 
@@ -179,14 +182,7 @@ function buildVolumeMounts(
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
-    fs.writeFileSync(
-      settingsFile,
-      JSON.stringify(
-        {},
-        null,
-        2,
-      ) + '\n',
-    );
+    fs.writeFileSync(settingsFile, JSON.stringify({}, null, 2) + '\n');
   }
 
   // Sync skills from container/skills/ into each group's .claude/skills/
@@ -276,9 +272,7 @@ function buildVolumeMounts(
  * Resolve sub-agent credentials using global config as fallback.
  * Returns entries ready to be passed to the container via ContainerInput.
  */
-function resolveSubAgentCredentials(
-  subAgents: SubAgentConfig[],
-): Array<{
+function resolveSubAgentCredentials(subAgents: SubAgentConfig[]): Array<{
   name: string;
   backend: string;
   model?: string;
