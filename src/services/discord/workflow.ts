@@ -39,8 +39,11 @@ export function handleDiscordWorkflowStart(
   isMain: boolean,
   deps: DiscordWorkflowIpcDeps,
 ): void {
-  if (!canStartWorkflowFromGroup(sourceGroup, isMain)) {
-    logger.warn({ sourceGroup }, 'Unauthorized start_workflow attempt blocked');
+  if (!canStartWorkflowFromGroup(sourceGroup)) {
+    logger.warn(
+      { sourceGroup, isMain },
+      'Unauthorized start_workflow attempt blocked',
+    );
     return;
   }
 

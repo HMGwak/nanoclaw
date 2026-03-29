@@ -742,6 +742,26 @@ describe('workflow IPC handlers', () => {
     expect(onWorkflowRequested).not.toHaveBeenCalled();
   });
 
+  it('main group cannot bypass workflow start authorization', async () => {
+    const onWorkflowRequested = vi.fn();
+    await processTaskIpc(
+      {
+        type: 'start_workflow',
+        title: 'No bypass',
+        chatJid: 'other@g.us',
+        steps: [{ assignee: 'third-group', goal: 'Implement' }],
+      },
+      'other-group',
+      true,
+      {
+        ...deps,
+        onWorkflowRequested,
+      },
+    );
+
+    expect(onWorkflowRequested).not.toHaveBeenCalled();
+  });
+
   it('routes report_result and cancel_workflow callbacks', async () => {
     const onWorkflowStepResult = vi.fn();
     const onWorkflowCancelled = vi.fn();

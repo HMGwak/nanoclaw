@@ -138,12 +138,11 @@ describe('service deployment resolution', () => {
   });
 
   it('uses deployment-level workflow start authorization', () => {
-    expect(canStartWorkflowFromGroup('discord_planning', false)).toBe(true);
-    expect(canStartWorkflowFromGroup('discord_planning_bot', false)).toBe(true);
-    expect(canStartWorkflowFromGroup('discord_workshop', false)).toBe(false);
-    expect(canStartWorkflowFromGroup('discord_workshop_teamlead', false)).toBe(
-      false,
-    );
-    expect(canStartWorkflowFromGroup('any-group', true)).toBe(true);
+    expect(canStartWorkflowFromGroup('discord_planning')).toBe(true);
+    expect(canStartWorkflowFromGroup('discord_planning_bot')).toBe(true);
+    expect(canStartWorkflowFromGroup('discord_workshop')).toBe(false);
+    expect(canStartWorkflowFromGroup('discord_workshop_teamlead')).toBe(false);
+    expect(canStartWorkflowFromGroup('discord_secretary')).toBe(false);
+    expect(canStartWorkflowFromGroup('any-group')).toBe(false);
   });
 });

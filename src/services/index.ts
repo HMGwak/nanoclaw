@@ -215,9 +215,7 @@ export function shouldEnforceSingleSender(group: RegisteredGroup): boolean {
 
 export function canStartWorkflowFromGroup(
   sourceGroup: string,
-  isMain: boolean,
 ): boolean {
-  if (isMain) return true;
   const deployment = getDiscordDeploymentForGroup(sourceGroup);
   return deployment?.canStartWorkflow === true;
 }
