@@ -127,6 +127,9 @@ describe('service deployment resolution', () => {
     expect(planningDeployment?.leadPrompt).toContain(
       'workflow-first coordinator',
     );
+    expect(planningDeployment?.leadPrompt).toContain(
+      'confirms user intent',
+    );
     expect(planningDeployment?.departmentPrompt).toContain(
       'Discord Planning Department',
     );
