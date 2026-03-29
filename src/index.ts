@@ -65,6 +65,7 @@ import {
   shouldEnforceSingleSender,
 } from './services/index.js';
 import {
+  buildDiscordCurrentAffairsSafetyBlock,
   buildDiscordSharedContextBlock,
   getDiscordGroupBindingForBotLabel,
   getDiscordGroupBindingForGroup,
@@ -135,7 +136,8 @@ function migrateDiscordGroupRegistrations(): void {
       ? getDiscordGroupBindingForBotLabel(botLabel)
       : null;
     const binding =
-      bindingByLabel && bindingByLabel.departmentId === bindingByFolder.departmentId
+      bindingByLabel &&
+      bindingByLabel.departmentId === bindingByFolder.departmentId
         ? bindingByLabel
         : bindingByFolder;
 
@@ -328,13 +330,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   }
 
   const promptBase = formatMessages(missedMessages, TIMEZONE);
+  const currentAffairsSafetyBlock = buildDiscordCurrentAffairsSafetyBlock(
+    group,
+    missedMessages,
+  );
   const sharedContextBlock = buildDiscordSharedContextBlock(group, chatJid, {
     beforeTimestamp: missedMessages[0]?.timestamp,
     limit: 30,
   });
-  const prompt = sharedContextBlock
-    ? `${sharedContextBlock}\n\n${promptBase}`
-    : promptBase;
+  const prompt = [currentAffairsSafetyBlock, sharedContextBlock, promptBase]
+    .filter(Boolean)
+    .join('\n\n');
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -586,8 +592,13 @@ async function startMessageLoop(): Promise<void> {
           const messagesToSend =
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
+          const currentAffairsSafetyBlock =
+            buildDiscordCurrentAffairsSafetyBlock(group, messagesToSend);
+          const pipedPrompt = [currentAffairsSafetyBlock, formatted]
+            .filter(Boolean)
+            .join('\n\n');
 
-          if (queue.sendMessage(chatJid, formatted)) {
+          if (queue.sendMessage(chatJid, pipedPrompt)) {
             logger.debug(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',

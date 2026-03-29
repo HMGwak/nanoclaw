@@ -38,6 +38,10 @@ export {
   buildDiscordSharedContextBlock,
   recordDiscordSharedVisibleReply,
 } from './shared-context.js';
+export {
+  buildDiscordCurrentAffairsSafetyBlock,
+  isDiscordCurrentAffairsTurn,
+} from './safety.js';
 export type { AdditionalDiscordBotConfig } from './bots.js';
 export type { DiscordGroupBindingSpec } from './bindings/groups.js';
 export type { DiscordServiceDeploymentSpec } from './types.js';
