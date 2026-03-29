@@ -29,7 +29,9 @@ describe('original source manifest registry', () => {
       id: 'entireio_cli',
       origin: 'github-upstream-derived',
     });
-    expect(getOriginalSourceManifest('cloudflare_browser_rendering')).toMatchObject({
+    expect(
+      getOriginalSourceManifest('cloudflare_browser_rendering'),
+    ).toMatchObject({
       id: 'cloudflare_browser_rendering',
       origin: 'vendor-docs-derived',
     });

@@ -348,7 +348,9 @@ describe('container instruction layers', () => {
     );
     expect(policyArg).toBeDefined();
     expect(policyArg).toContain('"enforcement":"hard"');
-    expect(policyArg).toContain('"chain":["cloudflare_fetch","agent_browser","playwright"]');
+    expect(policyArg).toContain(
+      '"chain":["cloudflare_fetch","agent_browser","playwright"]',
+    );
 
     emitOutputMarker(fakeProc, { status: 'success', result: 'ok' });
     fakeProc.emit('close', 0);

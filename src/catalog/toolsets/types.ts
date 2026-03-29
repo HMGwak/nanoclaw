@@ -1,4 +1,7 @@
-export type BrowserPolicyStage = 'cloudflare_fetch' | 'agent_browser' | 'playwright';
+export type BrowserPolicyStage =
+  | 'cloudflare_fetch'
+  | 'agent_browser'
+  | 'playwright';
 
 export interface BrowserToolPolicySpec {
   id: string;
