@@ -124,8 +124,14 @@ describe('service deployment resolution', () => {
     expect(planningDeployment?.leadPrompt).toContain(
       'skeptical of fuzzy requirements',
     );
+    expect(planningDeployment?.leadPrompt).toContain(
+      'workflow-first coordinator',
+    );
     expect(planningDeployment?.departmentPrompt).toContain(
       'Discord Planning Department',
+    );
+    expect(planningDeployment?.departmentPrompt).toContain(
+      'Use workflow-first routing by default',
     );
     expect(secretaryDeployment?.leadPrompt).toContain('비서실');
     expect(secretaryDeployment?.leadPrompt).toContain('concise and composed');
