@@ -41,7 +41,11 @@ export interface DebateProtocolSpec {
   consensusPolicy: DebateConsensusPolicy;
   requiredRoleSlots: DebateRoleSpec[];
   outputSections: Array<
-    'round_summaries' | 'final_judgment' | 'rationale' | 'minority_note' | 'followups'
+    | 'round_summaries'
+    | 'final_judgment'
+    | 'rationale'
+    | 'minority_note'
+    | 'followups'
   >;
   sourceModuleIds?: string[];
 }

@@ -36,7 +36,11 @@ const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
     consensusPolicy: 'lead_final_judgment',
     requiredRoleSlots: [
       { id: 'proposer', description: 'Argues for the motion', stance: 'pro' },
-      { id: 'opposer', description: 'Argues against the motion', stance: 'con' },
+      {
+        id: 'opposer',
+        description: 'Argues against the motion',
+        stance: 'con',
+      },
       { id: 'adjudicator', description: 'Final judge', stance: 'neutral' },
     ],
     outputSections: [
@@ -135,7 +139,11 @@ const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
     requiredRoleSlots: [
       { id: 'option_a', description: 'Argues option A', stance: 'pro' },
       { id: 'option_b', description: 'Argues option B', stance: 'con' },
-      { id: 'evaluator', description: 'Scores and adjudicates', stance: 'neutral' },
+      {
+        id: 'evaluator',
+        description: 'Scores and adjudicates',
+        stance: 'neutral',
+      },
     ],
     outputSections: [
       'round_summaries',

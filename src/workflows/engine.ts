@@ -100,7 +100,12 @@ export class WorkflowEngine {
     writePendingWorkflowSnapshot(this.repository, workflow.id);
 
     logger.info(
-      { workflowId: workflow.id, flowId: flowId || null, title, steps: planSteps.length },
+      {
+        workflowId: workflow.id,
+        flowId: flowId || null,
+        title,
+        steps: planSteps.length,
+      },
       'Workflow requested, awaiting confirmation',
     );
 

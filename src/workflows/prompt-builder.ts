@@ -6,7 +6,8 @@ function parseJsonArray(value: string | null): string[] {
   const parsed = JSON.parse(value) as unknown;
   if (Array.isArray(parsed)) {
     return parsed.filter(
-      (item): item is string => typeof item === 'string' && item.trim().length > 0,
+      (item): item is string =>
+        typeof item === 'string' && item.trim().length > 0,
     );
   }
   if (typeof parsed === 'string' && parsed.trim().length > 0) {

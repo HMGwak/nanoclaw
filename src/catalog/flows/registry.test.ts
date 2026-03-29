@@ -4,7 +4,9 @@ import { getFlowSpec, listFlowSpecs, parseFlowSteps } from './index.js';
 
 describe('catalog flow registry', () => {
   it('loads both planning and experiment loop flows', () => {
-    const flowIds = listFlowSpecs().map((flow) => flow.id).sort();
+    const flowIds = listFlowSpecs()
+      .map((flow) => flow.id)
+      .sort();
     expect(flowIds).toEqual(['experiment-loop', 'planning-workshop']);
   });
 

@@ -20,7 +20,10 @@ export interface WorkflowStageMemoryRecord {
   result_summary: string;
 }
 
-function resolveStageEventsPath(groupFolder: string, workflowId: string): string {
+function resolveStageEventsPath(
+  groupFolder: string,
+  workflowId: string,
+): string {
   const runDir = resolveGroupRunPath(groupFolder, workflowId);
   const memoryDir = path.join(runDir, MEMORY_DIR);
   fs.mkdirSync(memoryDir, { recursive: true });

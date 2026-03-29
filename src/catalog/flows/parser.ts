@@ -5,7 +5,8 @@ import { parsePlanningWorkshopSteps } from './planning-workshop.js';
 function toStringList(value: unknown): string[] | undefined {
   if (Array.isArray(value)) {
     const normalized = value.filter(
-      (item): item is string => typeof item === 'string' && item.trim().length > 0,
+      (item): item is string =>
+        typeof item === 'string' && item.trim().length > 0,
     );
     return normalized.length > 0 ? normalized : undefined;
   }
