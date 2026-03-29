@@ -15,13 +15,31 @@ describe('agent factory', () => {
     const team = buildGroupAgentTeam(group);
 
     expect(team.lead?.displayName).toBe('작업실 팀장');
-    expect(team.lead?.toolsetIds).toEqual(['workshop-teamleader-default']);
-    expect(team.teammates).toHaveLength(1);
-    expect(team.teammates[0].displayName).toBe('키미');
-    expect(team.teammates[0].toolsetIds).toEqual([
-      'workshop-teammate-kimi-research',
+    expect(team.lead?.toolsetIds).toEqual([
+      'global_general_cli',
+      'discord_workshop_lead_local',
     ]);
-    expect(team.teammateConfigs).toHaveLength(1);
+    expect(team.teammates).toHaveLength(0);
+    expect(team.teammateConfigs).toHaveLength(0);
+  });
+
+  it('builds a dedicated kimi bot team from the service deployment catalog', () => {
+    const group: RegisteredGroup = {
+      name: '작업실-키미',
+      folder: 'discord_workshop_kimi',
+      trigger: '@키미',
+      added_at: '2026-01-01T00:00:00Z',
+    };
+
+    const team = buildGroupAgentTeam(group);
+
+    expect(team.lead?.displayName).toBe('키미');
+    expect(team.lead?.toolsetIds).toEqual([
+      'global_browser_research',
+      'discord_workshop_research_local',
+    ]);
+    expect(team.teammates).toHaveLength(0);
+    expect(team.teammateConfigs).toHaveLength(0);
   });
 
   it('falls back to the group name when no deployment exists', () => {

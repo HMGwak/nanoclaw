@@ -47,6 +47,10 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  instructionLayers?: Array<{
+    id: string;
+    content: string;
+  }>;
   /** Resolved sub-agent configs for ask_agent MCP tool. */
   subAgents?: Array<{
     name: string;
@@ -70,6 +74,51 @@ interface VolumeMount {
   hostPath: string;
   containerPath: string;
   readonly: boolean;
+}
+
+function buildServiceInstructionLayers(
+  group: RegisteredGroup,
+): Array<{ id: string; content: string }> {
+  const deployment = resolveServiceDeployment(group);
+  if (!deployment) return [];
+
+  const layers: Array<{ id: string; content: string }> = [];
+  if (deployment.leadCapabilityPrompt) {
+    layers.push({
+      id: `catalog-capability:${deployment.lead?.id || deployment.id}`,
+      content: deployment.leadCapabilityPrompt,
+    });
+  }
+  if (deployment.leadPrompt) {
+    layers.push({
+      id: `service-personnel:${deployment.lead?.id || deployment.id}`,
+      content: deployment.leadPrompt,
+    });
+  }
+  if (deployment.departmentPrompt) {
+    layers.push({
+      id: `service-department:${deployment.departmentId}`,
+      content: deployment.departmentPrompt,
+    });
+  }
+  const rosterLines = [
+    `Service: ${deployment.service}`,
+    `Department: ${deployment.department.displayName} (${deployment.department.id})`,
+    deployment.lead
+      ? `Lead: ${deployment.lead.displayName} — ${deployment.lead.role || 'unspecified role'}`
+      : null,
+    ...deployment.teammates.map(
+      (teammate) =>
+        `Teammate: ${teammate.displayName} — ${teammate.role || 'unspecified role'}`,
+    ),
+  ].filter((line): line is string => Boolean(line));
+  if (rosterLines.length > 0) {
+    layers.push({
+      id: `service-roster:${deployment.id}`,
+      content: ['## Service Roster', '', ...rosterLines].join('\n'),
+    });
+  }
+  return layers;
 }
 
 function listRelativeFilesRecursive(
@@ -292,6 +341,7 @@ export function resolveSubAgentCredentials(subAgents: SubAgentConfig[]): Array<{
   apiKey?: string;
   baseUrl?: string;
   role?: string;
+  systemPrompt?: string;
   allowedTools?: string[];
 }> {
   const globalConfig = getAgentBackendConfig();
@@ -326,6 +376,7 @@ export function resolveSubAgentCredentials(subAgents: SubAgentConfig[]): Array<{
       apiKey,
       baseUrl,
       role: sa.role,
+      systemPrompt: sa.systemPrompt,
       allowedTools: sa.allowedTools,
     };
   });
@@ -343,8 +394,9 @@ async function buildContainerArgs(
   // Per-group backend override from containerConfig, fallback to global
   const deployment = group ? resolveServiceDeployment(group) : null;
   const runtimeCfg = deployment?.containerRuntime;
+  const lead = deployment?.lead;
   const groupCfg = group?.containerConfig;
-  const backend = groupCfg?.backend || globalConfig.backend;
+  const backend = groupCfg?.backend || lead?.backend || globalConfig.backend;
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
@@ -377,7 +429,7 @@ async function buildContainerArgs(
     }
   } else if (backend === 'opencode') {
     const apiKey = groupCfg?.apiKey || globalConfig.opencodeApiKey;
-    const model = groupCfg?.model || globalConfig.opencodeModel;
+    const model = groupCfg?.model || lead?.model || globalConfig.opencodeModel;
     if (apiKey) args.push('-e', `OPENCODE_API_KEY=${apiKey}`);
     if (model) args.push('-e', `OPENCODE_MODEL=${model}`);
     // Also pass OpenAI credentials for ask_codex tool (dual-model collaboration)
@@ -387,15 +439,18 @@ async function buildContainerArgs(
     args.push('-e', `CODEX_MODEL=${openaiModel}`);
   } else if (backend === 'openai-compat' || backend === 'zai') {
     const apiKey = groupCfg?.apiKey || globalConfig.openaiCompatApiKey;
-    const baseUrl = groupCfg?.baseUrl || globalConfig.openaiCompatBaseUrl;
-    const model = groupCfg?.model || globalConfig.openaiCompatModel;
+    const baseUrl =
+      groupCfg?.baseUrl || lead?.baseUrl || globalConfig.openaiCompatBaseUrl;
+    const model =
+      groupCfg?.model || lead?.model || globalConfig.openaiCompatModel;
     if (apiKey) args.push('-e', `OPENAI_COMPAT_API_KEY=${apiKey}`);
     if (baseUrl) args.push('-e', `OPENAI_COMPAT_BASE_URL=${baseUrl}`);
     if (model) args.push('-e', `OPENAI_COMPAT_MODEL=${model}`);
   } else if (backend === 'openai') {
     const apiKey = groupCfg?.apiKey || globalConfig.openaiApiKey;
-    const baseUrl = groupCfg?.baseUrl || globalConfig.openaiBaseUrl;
-    const model = groupCfg?.model || globalConfig.openaiModel;
+    const baseUrl =
+      groupCfg?.baseUrl || lead?.baseUrl || globalConfig.openaiBaseUrl;
+    const model = groupCfg?.model || lead?.model || globalConfig.openaiModel;
     if (apiKey) args.push('-e', `OPENAI_API_KEY=${apiKey}`);
     if (baseUrl) args.push('-e', `OPENAI_BASE_URL=${baseUrl}`);
     if (model) args.push('-e', `OPENAI_MODEL=${model}`);
@@ -492,6 +547,17 @@ export async function runContainerAgent(
 
     // Resolve sub-agent credentials and include in container input
     const containerInput = { ...input };
+    const instructionLayers = buildServiceInstructionLayers(group);
+    if (instructionLayers.length > 0) {
+      containerInput.instructionLayers = instructionLayers;
+      logger.info(
+        {
+          group: group.name,
+          layerIds: instructionLayers.map((layer) => layer.id),
+        },
+        'Passing resolved instruction layers to container',
+      );
+    }
     const groupTeam = buildGroupAgentTeam(group);
     if (groupTeam.teammateConfigs.length > 0) {
       containerInput.subAgents = resolveSubAgentCredentials(

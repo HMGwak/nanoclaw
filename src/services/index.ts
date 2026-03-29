@@ -2,7 +2,11 @@ import { getAgentSpec } from '../catalog/agents/index.js';
 import { getSdkProfileSpec } from '../catalog/sdk-profiles/index.js';
 import { getToolsetSpec } from '../catalog/toolsets/index.js';
 import { RegisteredGroup } from '../types.js';
+import { getDiscordDepartmentSpec } from './discord/departments/index.js';
 import { getDiscordDeploymentForGroup } from './discord/deployments.js';
+import { getDiscordPersonnelSpec } from './discord/resources/personnel.js';
+import { getDiscordPersonnelPrompt } from './discord/resources/prompts.js';
+import { getDiscordLocalToolsetSpec } from './discord/resources/toolsets.js';
 import {
   ResolvedAgentRuntimeSpec,
   ResolvedServiceDeployment,
@@ -14,31 +18,65 @@ function unique(values: string[]): string[] {
   );
 }
 
-function mergeAllowedTools(toolsetIds: string[]): string[] | undefined {
-  const all = toolsetIds
-    .map((toolsetId) => getToolsetSpec(toolsetId))
-    .filter((spec): spec is NonNullable<typeof spec> => spec !== null)
-    .flatMap((spec) => spec.allowedTools ?? []);
-  return all.length > 0 ? unique(all) : undefined;
+function mergeAllowedToolsFromSets(
+  allowedToolSets: Array<string[] | null | undefined>,
+): string[] | undefined {
+  const hasUnrestricted = allowedToolSets.some((entry) => entry === null);
+  if (hasUnrestricted) return undefined;
+  const merged = unique(allowedToolSets.flatMap((entry) => entry || []));
+  return merged.length > 0 ? merged : undefined;
 }
 
-function resolveAgentRuntime(agentId: string): ResolvedAgentRuntimeSpec | null {
-  const agent = getAgentSpec(agentId);
+function resolveAgentRuntime(
+  personnelId: string,
+): ResolvedAgentRuntimeSpec | null {
+  const personnel = getDiscordPersonnelSpec(personnelId);
+  if (!personnel) return null;
+
+  const agent = getAgentSpec(personnel.catalogAgentId);
   if (!agent) return null;
+
   const profile = getSdkProfileSpec(agent.baseProfileId);
   if (!profile) return null;
+  const personaPrompt = getDiscordPersonnelPrompt(personnel.promptId);
+
+  const localToolsets = personnel.localToolsetIds
+    .map((toolsetId) => getDiscordLocalToolsetSpec(toolsetId))
+    .filter((spec): spec is NonNullable<typeof spec> => spec !== null);
+
+  const importedGlobalToolsetIds = unique(
+    localToolsets.flatMap((toolset) => toolset.importedGlobalToolsetIds),
+  );
+
+  const globalToolsetIds = unique([
+    ...agent.defaultToolsetIds,
+    ...importedGlobalToolsetIds,
+  ]);
+
+  const globalToolsets = globalToolsetIds
+    .map((toolsetId) => getToolsetSpec(toolsetId))
+    .filter((spec): spec is NonNullable<typeof spec> => spec !== null);
+
+  const allowedTools = mergeAllowedToolsFromSets([
+    ...globalToolsets.map((toolset) => toolset.allowedTools),
+    ...localToolsets.map((toolset) => toolset.allowedTools),
+  ]);
+
+  const flowIds = unique([...agent.defaultFlowIds, ...personnel.flowIds]);
 
   return {
-    id: agent.id,
-    name: agent.displayName,
-    displayName: agent.displayName,
+    id: personnel.id,
+    name: personnel.displayName,
+    displayName: personnel.displayName,
     backend: profile.backend,
     model: profile.model,
     baseUrl: profile.baseUrl,
-    role: agent.role,
-    allowedTools: mergeAllowedTools(agent.defaultToolsetIds),
-    toolsetIds: [...agent.defaultToolsetIds],
-    flowIds: [...agent.defaultFlowIds],
+    role: personnel.role || agent.role,
+    capabilityPrompt: agent.capabilityPrompt || null,
+    personaPrompt,
+    allowedTools,
+    toolsetIds: [...globalToolsetIds, ...personnel.localToolsetIds],
+    flowIds,
   };
 }
 
@@ -48,9 +86,18 @@ export function resolveServiceDeployment(
   const discordDeployment = getDiscordDeploymentForGroup(group);
   if (!discordDeployment) return null;
 
-  const lead = resolveAgentRuntime(discordDeployment.leadAgentId);
-  const teammates = discordDeployment.teammateAgentIds
-    .map((agentId) => resolveAgentRuntime(agentId))
+  const lead = resolveAgentRuntime(discordDeployment.leadPersonnelId);
+  const teammates = discordDeployment.teammatePersonnelIds
+    .map((personnelId) => resolveAgentRuntime(personnelId))
+    .filter((agent): agent is ResolvedAgentRuntimeSpec => agent !== null);
+  const department = getDiscordDepartmentSpec(discordDeployment.departmentId);
+  const personnel = unique(
+    [lead, ...teammates].filter(Boolean).map((agent) => agent!.id),
+  )
+    .map(
+      (personnelId) =>
+        [lead, ...teammates].find((agent) => agent?.id === personnelId) || null,
+    )
     .filter((agent): agent is ResolvedAgentRuntimeSpec => agent !== null);
 
   const speakerNames = unique(
@@ -59,23 +106,44 @@ export function resolveServiceDeployment(
       ...teammates.map((agent) => agent.displayName),
     ].filter(Boolean) as string[],
   );
+  const senderBotMap: Record<string, string> = {
+    ...(discordDeployment.senderBotMap || {}),
+  };
+  if (lead?.displayName && discordDeployment.botLabel) {
+    senderBotMap[lead.displayName] = discordDeployment.botLabel;
+  }
 
   return {
     id: discordDeployment.id,
     service: 'discord',
+    departmentId: discordDeployment.departmentId,
+    botLabel: discordDeployment.botLabel,
+    canonicalGroupFolder: discordDeployment.canonicalGroupFolder,
+    department: {
+      id: department.id,
+      displayName: department.displayName,
+      prompt: department.prompt,
+      handoffTemplate: department.handoffTemplate,
+    },
     group,
     lead,
+    leadCapabilityPrompt: lead?.capabilityPrompt || null,
+    leadPrompt: lead?.personaPrompt || null,
+    departmentPrompt: department.prompt,
     teammates,
+    personnel,
     speakerNames,
-    senderBotMap: { ...(discordDeployment.senderBotMap || {}) },
+    senderBotMap,
     personaMode: discordDeployment.personaMode || 'hybrid',
+    responsePolicy: discordDeployment.responsePolicy || 'always',
+    requiresTrigger: discordDeployment.requiresTrigger !== false,
     flowIds: [...discordDeployment.flowIds],
     canStartWorkflow: discordDeployment.canStartWorkflow === true,
     containerRuntime: {
       additionalMounts: group.containerConfig?.additionalMounts,
       timeout: group.containerConfig?.timeout,
       backend: group.containerConfig?.backend,
-      allowedTools: group.containerConfig?.allowedTools,
+      allowedTools: group.containerConfig?.allowedTools || lead?.allowedTools,
       model: group.containerConfig?.model,
       apiKey: group.containerConfig?.apiKey,
       baseUrl: group.containerConfig?.baseUrl,
@@ -105,6 +173,44 @@ export function resolveGroupPersonaMode(
 ): 'hybrid' | 'bot_only' {
   if (!group) return 'hybrid';
   return resolveServiceDeployment(group)?.personaMode || 'hybrid';
+}
+
+function parseDiscordBotLabelFromJid(chatJid: string): string | null {
+  const parts = chatJid.replace(/^dc:/, '').split(':');
+  if (parts.length < 2) return null;
+  const label = parts[1]?.trim().toLowerCase();
+  return label || null;
+}
+
+export function resolveGroupTargetSender(
+  group: RegisteredGroup,
+  chatJid: string,
+): string {
+  const deployment = resolveServiceDeployment(group);
+  const fallback = deployment?.lead?.displayName || group.name;
+  if (!deployment) return fallback;
+
+  const botLabel = parseDiscordBotLabelFromJid(chatJid);
+  if (!botLabel || botLabel === 'primary') return fallback;
+
+  for (const [senderName, mappedLabel] of Object.entries(
+    deployment.senderBotMap,
+  )) {
+    if (mappedLabel.trim().toLowerCase() === botLabel) {
+      return senderName;
+    }
+  }
+
+  return fallback;
+}
+
+export function shouldEnforceSingleSender(group: RegisteredGroup): boolean {
+  const deployment = resolveServiceDeployment(group);
+  if (!deployment) return false;
+  return (
+    deployment.personaMode === 'bot_only' &&
+    Object.keys(deployment.senderBotMap).length > 0
+  );
 }
 
 export function canStartWorkflowFromGroup(

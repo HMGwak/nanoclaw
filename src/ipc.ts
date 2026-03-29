@@ -11,6 +11,10 @@ import {
   handleDiscordWorkflowResult,
   handleDiscordWorkflowStart,
 } from './services/discord/index.js';
+import {
+  resolveGroupTargetSender,
+  shouldEnforceSingleSender,
+} from './services/index.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { normalizeAgentOutputs } from './agent-output.js';
@@ -37,6 +41,7 @@ export interface IpcDeps {
   onWorkflowRequested?: (
     title: string,
     steps: WorkflowPlanStep[],
+    flowId: string,
     sourceGroup: string,
     chatJid: string,
   ) => void;
@@ -111,7 +116,11 @@ export function startIpcWatcher(deps: IpcDeps): void {
                         targetGroup,
                         typeof data.sender === 'string'
                           ? data.sender
-                          : undefined,
+                          : resolveGroupTargetSender(targetGroup, data.chatJid),
+                        {
+                          enforceSingleSender:
+                            shouldEnforceSingleSender(targetGroup),
+                        },
                       )
                     : [
                         {

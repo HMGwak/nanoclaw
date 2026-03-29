@@ -13,6 +13,7 @@ describe('discord workflow service handlers', () => {
     handleDiscordWorkflowStart(
       {
         title: '새 파이프라인',
+        flowId: 'planning-workshop',
         chatJid: 'dc:1234:planning',
         steps: [{ assignee: 'discord_workshop', goal: '구현' }],
       },
@@ -26,12 +27,14 @@ describe('discord workflow service handlers', () => {
       [
         {
           step_index: 0,
-          assignee: 'discord_workshop',
+          assignee: 'discord_workshop_teamlead',
           goal: '구현',
           acceptance_criteria: undefined,
           constraints: undefined,
+          stage_id: 'execute',
         },
       ],
+      'planning-workshop',
       'discord_planning',
       'dc:1234:planning',
     );

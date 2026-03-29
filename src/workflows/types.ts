@@ -16,17 +16,21 @@ export interface WorkflowEngineDeps {
 
 export interface WorkflowStepContext {
   workflowId: string;
+  flowId?: string;
   stepId: string;
   stepIndex: number;
+  stageId?: string;
   role: string;
   goal: string;
   acceptanceCriteria: string[] | null;
   constraints: string[] | null;
   previousStepResult?: string;
+  memorySummary?: string;
 }
 
 export interface WorkflowRequest {
   title: string;
+  flowId?: string;
   steps: WorkflowPlanStep[];
   sourceGroupFolder: string;
   sourceChatJid: string;

@@ -1,7 +1,7 @@
 {
   "id": "autoresearch",
-  "origin": "local-preserved-module",
-  "version": "draft",
-  "license": "unknown",
-  "notes": "Reserved preserved source module for autoresearch-derived toolsets and flows."
+  "origin": "github-upstream-derived",
+  "version": "snapshot-2026-03-29",
+  "license": "MIT",
+  "notes": "Upstream: https://github.com/karpathy/autoresearch @ 228791fb499afffb54b46200aca536f79142f117"
 }

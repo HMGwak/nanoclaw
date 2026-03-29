@@ -1,0 +1,7 @@
+{
+  "id": "quorum_cli",
+  "origin": "github-upstream-derived",
+  "version": "snapshot-2026-03",
+  "license": "unknown",
+  "notes": "Preserved debate mode taxonomy and contracts derived from quorum-cli style discussions."
+}

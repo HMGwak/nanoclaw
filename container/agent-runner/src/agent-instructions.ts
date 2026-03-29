@@ -6,6 +6,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { ContainerInput, InstructionLayer } from './types.js';
 
 const SUBAGENTS_CONFIG_PATH = '/home/node/.nanoclaw/subagents.json';
 const SHARED_SKILLS_DIR = '/home/node/.nanoclaw/skills';
@@ -22,6 +23,11 @@ interface SkillMetadata {
   name: string;
   description: string;
   body: string;
+}
+
+export interface ResolvedInstructionSection {
+  id: string;
+  content: string;
 }
 
 /**
@@ -119,6 +125,109 @@ export function buildSharedSkillsInfo(): string | null {
   }
 }
 
+function extractWorkflowRunId(prompt: string): string | null {
+  const patterns = [
+    /^\s*워크플로우 ID:\s*([A-Za-z0-9][A-Za-z0-9_-]{0,127})\s*$/m,
+    /workflow_id:\s*"([A-Za-z0-9][A-Za-z0-9_-]{0,127})"/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = prompt.match(pattern);
+    if (match?.[1]) return match[1];
+  }
+  return null;
+}
+
+function getRunInstruction(containerInput: ContainerInput): string | null {
+  const runId = extractWorkflowRunId(containerInput.prompt);
+  if (!runId) return null;
+  return readInstructionFile(path.join('/workspace/group', 'runs', runId));
+}
+
+function hasExplicitInstructionLayers(
+  containerInput: ContainerInput,
+): boolean {
+  return (
+    Array.isArray(containerInput.instructionLayers) &&
+    containerInput.instructionLayers.some((layer) => layer.content.trim())
+  );
+}
+
+function toResolvedSections(
+  layers: InstructionLayer[] | undefined,
+): ResolvedInstructionSection[] {
+  return (layers || [])
+    .filter((layer) => layer.content.trim())
+    .map((layer) => ({
+      id: layer.id,
+      content: layer.content.trim(),
+    }));
+}
+
+export function buildInstructionSections(opts: {
+  containerInput: ContainerInput;
+  includeGlobal?: boolean;
+  includeGroupOverlay?: boolean;
+  includeRunOverlay?: boolean;
+  defaultPrompt?: string;
+}): ResolvedInstructionSection[] {
+  const sections: ResolvedInstructionSection[] = [];
+
+  const explicitSections = toResolvedSections(opts.containerInput.instructionLayers);
+  if (explicitSections.length > 0) {
+    sections.push(...explicitSections);
+  } else if (opts.defaultPrompt) {
+    sections.push({ id: 'default', content: opts.defaultPrompt });
+  }
+
+  if (opts.includeGroupOverlay !== false) {
+    const groupInstructions = readInstructionFile('/workspace/group');
+    if (groupInstructions) {
+      sections.push({ id: 'group-overlay', content: groupInstructions });
+    }
+  }
+
+  if (opts.includeRunOverlay !== false) {
+    const runInstructions = getRunInstruction(opts.containerInput);
+    if (runInstructions) {
+      sections.push({ id: 'run-overlay', content: runInstructions });
+    }
+  }
+
+  if (opts.includeGlobal !== false && !opts.containerInput.isMain) {
+    const globalInstructions = readInstructionFile('/workspace/global');
+    if (globalInstructions) {
+      sections.push({ id: 'global', content: globalInstructions });
+    }
+  }
+
+  const teamInfo = buildTeamInfo();
+  if (teamInfo) {
+    sections.push({ id: 'team-info', content: teamInfo });
+  }
+
+  const sharedSkills = buildSharedSkillsInfo();
+  if (sharedSkills) {
+    sections.push({ id: 'shared-skills', content: sharedSkills });
+  }
+
+  return sections;
+}
+
+export function materializeInstructionFiles(
+  sections: ResolvedInstructionSection[],
+  targetDir: string,
+): string[] {
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  return sections.map((section, index) => {
+    const filename = `${String(index).padStart(2, '0')}-${section.id.replace(/[^a-z0-9_-]+/gi, '-')}.md`;
+    const filepath = path.join(targetDir, filename);
+    fs.writeFileSync(filepath, section.content + '\n');
+    return filepath;
+  });
+}
+
 /**
  * Generate team info section from subagents config.
  * Returns null if no sub-agents are configured.
@@ -155,39 +264,31 @@ export function buildTeamInfo(): string | null {
 /**
  * Build a complete system prompt: group instructions + global instructions + team info.
  */
-export function buildAgentPrompt(opts?: {
+export function buildAgentPrompt(opts: {
+  containerInput: ContainerInput;
   includeGlobal?: boolean;
-  isMain?: boolean;
+  includeGroupOverlay?: boolean;
+  includeRunOverlay?: boolean;
   defaultPrompt?: string;
 }): string {
-  const sections: string[] = [];
+  const sections = buildInstructionSections({
+    containerInput: opts.containerInput,
+    includeGlobal: opts?.includeGlobal,
+    includeGroupOverlay: opts?.includeGroupOverlay,
+    includeRunOverlay: opts?.includeRunOverlay,
+    defaultPrompt: opts?.defaultPrompt,
+  });
 
-  // Group instructions
-  const groupInstructions = readInstructionFile('/workspace/group');
-  if (groupInstructions) {
-    sections.push(groupInstructions);
-  } else if (opts?.defaultPrompt) {
-    sections.push(opts.defaultPrompt);
+  if (
+    opts?.includeGroupOverlay === false &&
+    hasExplicitInstructionLayers(opts.containerInput)
+  ) {
+    sections.unshift({
+      id: 'instruction-precedence',
+      content:
+        'Instruction precedence: service persona and department policy are the primary source of truth. Room-local AGENTS.md is only a local overlay and must not override them except for room-specific notes.',
+    });
   }
 
-  // Global instructions (skip for main group — it already has its own)
-  if (opts?.includeGlobal !== false && !opts?.isMain) {
-    const globalInstructions = readInstructionFile('/workspace/global');
-    if (globalInstructions) {
-      sections.push(globalInstructions);
-    }
-  }
-
-  // Team info (auto-generated from subagents.json)
-  const teamInfo = buildTeamInfo();
-  if (teamInfo) {
-    sections.push(teamInfo);
-  }
-
-  const sharedSkills = buildSharedSkillsInfo();
-  if (sharedSkills) {
-    sections.push(sharedSkills);
-  }
-
-  return sections.join('\n\n');
+  return sections.map((section) => section.content).join('\n\n');
 }

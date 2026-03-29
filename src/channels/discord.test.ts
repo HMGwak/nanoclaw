@@ -817,10 +817,10 @@ describe('DiscordChannel', () => {
     it('uses a real secondary bot when sender is mapped to a bot label', async () => {
       const opts = createTestOpts({
         registeredGroups: vi.fn(() => ({
-          'dc:1234567890123456:workshop': {
-            name: '작업실',
-            folder: 'discord_workshop',
-            trigger: '@작업실',
+          'dc:1234567890123456:kimi': {
+            name: '작업실-키미',
+            folder: 'discord_workshop_kimi',
+            trigger: '@키미',
             added_at: '2024-01-01T00:00:00.000Z',
           },
         })),
@@ -855,7 +855,7 @@ describe('DiscordChannel', () => {
       ];
 
       await channel.sendMessage(
-        'dc:1234567890123456:workshop',
+        'dc:1234567890123456:kimi',
         '키미: 실제 봇으로 말합니다.',
         { sender: '키미' },
       );

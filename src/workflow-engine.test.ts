@@ -1,4 +1,7 @@
+import fs from 'fs';
+import path from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { GROUPS_DIR } from './config.js';
 import {
   _initTestDatabase,
   _closeDatabase,
@@ -266,6 +269,7 @@ describe('WorkflowEngine', () => {
         assignee: 'discord_workshop',
         goal: 'Build the feature',
         acceptance_criteria: ['Tests pass'],
+        stage_id: 'change',
       },
     ];
 
@@ -274,6 +278,7 @@ describe('WorkflowEngine', () => {
       planSteps,
       'discord_planning',
       'dc:1234:planning',
+      'experiment-loop',
     );
 
     expect(wf.id).toMatch(/^wf-/);
@@ -281,16 +286,35 @@ describe('WorkflowEngine', () => {
     // Check DB state
     const dbWf = getWorkflow(wf.id)!;
     expect(dbWf.status).toBe('awaiting_confirmation');
+    expect(dbWf.flow_id).toBe('experiment-loop');
 
     // Check steps created
     const steps = getWorkflowSteps(wf.id);
     expect(steps).toHaveLength(1);
     expect(steps[0].goal).toBe('Build the feature');
+    expect(steps[0].stage_id).toBe('change');
 
     // Check confirmation message sent
     expect(deps.sentMessages).toHaveLength(1);
     expect(deps.sentMessages[0].jid).toBe('dc:1234:planning');
     expect(deps.sentMessages[0].text).toContain('워크플로우 요청');
+
+    const sourceRunSnapshot = path.join(
+      GROUPS_DIR,
+      'discord_planning',
+      'runs',
+      wf.id,
+      'workflow.json',
+    );
+    const assigneeRunSnapshot = path.join(
+      GROUPS_DIR,
+      'discord_workshop',
+      'runs',
+      wf.id,
+      'workflow.json',
+    );
+    expect(fs.existsSync(sourceRunSnapshot)).toBe(true);
+    expect(fs.existsSync(assigneeRunSnapshot)).toBe(true);
   });
 
   it('confirmWorkflow starts first step', async () => {
@@ -334,11 +358,22 @@ describe('WorkflowEngine', () => {
     const wf = await engine.requestWorkflow(
       'Multi-step',
       [
-        { step_index: 0, assignee: 'discord_workshop', goal: 'Step 1' },
-        { step_index: 1, assignee: 'discord_planning', goal: 'Step 2' },
+        {
+          step_index: 0,
+          assignee: 'discord_workshop',
+          goal: 'Step 1',
+          stage_id: 'baseline',
+        },
+        {
+          step_index: 1,
+          assignee: 'discord_planning',
+          goal: 'Step 2',
+          stage_id: 'change',
+        },
       ],
       'discord_planning',
       'dc:1234:planning',
+      'experiment-loop',
     );
 
     await engine.confirmWorkflow(wf.id);
@@ -354,6 +389,20 @@ describe('WorkflowEngine', () => {
     // Check step 1 was enqueued
     expect(deps.enqueuedSteps).toHaveLength(1);
     expect(deps.enqueuedSteps[0].groupJid).toBe('dc:1234:planning');
+    expect(deps.enqueuedSteps[0].prompt).toContain('Flow ID: experiment-loop');
+    expect(deps.enqueuedSteps[0].prompt).toContain('Stage ID: change');
+    expect(deps.enqueuedSteps[0].prompt).toContain('누적 메모리 요약');
+    expect(deps.enqueuedSteps[0].prompt).toContain('Step 1 done');
+
+    const memoryFile = path.join(
+      GROUPS_DIR,
+      'discord_planning',
+      'runs',
+      wf.id,
+      'memory',
+      'stage-events.jsonl',
+    );
+    expect(fs.existsSync(memoryFile)).toBe(true);
   });
 
   it('onStepCompleted completes workflow on last step', async () => {

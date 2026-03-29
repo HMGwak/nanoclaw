@@ -35,10 +35,29 @@ vi.mock('fs', async () => {
     ...actual,
     default: {
       ...actual,
-      existsSync: vi.fn(() => false),
+      existsSync: vi.fn((filepath: string) => {
+        return (
+          filepath.includes('/src/services/discord/resources/prompts/') ||
+          filepath.includes('/src/services/discord/departments/')
+        );
+      }),
       mkdirSync: vi.fn(),
       writeFileSync: vi.fn(),
-      readFileSync: vi.fn(() => ''),
+      readFileSync: vi.fn((filepath: string) => {
+        if (filepath.includes('workshop-teamlead.md')) {
+          return 'lead persona prompt';
+        }
+        if (filepath.includes('workshop-kimi.md')) {
+          return 'kimi persona prompt';
+        }
+        if (filepath.includes('/departments/workshop/AGENTS.md')) {
+          return 'workshop department prompt';
+        }
+        if (filepath.includes('/departments/handoff/template.md')) {
+          return 'handoff template';
+        }
+        return '';
+      }),
       readdirSync: vi.fn(() => []),
       statSync: vi.fn(() => ({ isDirectory: () => false })),
       copyFileSync: vi.fn(),
@@ -231,6 +250,7 @@ describe('resolveSubAgentCredentials', () => {
         name: '키미',
         backend: 'opencode',
         model: 'opencode-go/kimi-k2.5',
+        systemPrompt: 'persona + department',
         allowedTools: ['web_search', 'browse_open'],
       },
     ]);
@@ -240,8 +260,62 @@ describe('resolveSubAgentCredentials', () => {
         name: '키미',
         backend: 'opencode',
         model: 'opencode-go/kimi-k2.5',
+        systemPrompt: 'persona + department',
         allowedTools: ['web_search', 'browse_open'],
       }),
     ]);
+  });
+});
+
+describe('container instruction layers', () => {
+  it('passes service-owned instruction layers into the container input', async () => {
+    let stdinData = '';
+    fakeProc = createFakeProcess();
+    fakeProc.stdin.on('data', (chunk) => {
+      stdinData += chunk.toString();
+    });
+
+    const resultPromise = runContainerAgent(
+      {
+        ...testGroup,
+        folder: 'discord_workshop',
+        name: '작업실',
+      },
+      {
+        ...testInput,
+        groupFolder: 'discord_workshop',
+      },
+      () => {},
+      async () => {},
+    );
+    await new Promise<void>((resolve) => fakeProc.stdin.on('finish', resolve));
+
+    const containerInput = JSON.parse(stdinData);
+    expect(containerInput.instructionLayers).toEqual([
+      {
+        id: 'catalog-capability:discord_workshop_teamlead',
+        content: expect.stringContaining('operating as a planner'),
+      },
+      {
+        id: 'service-personnel:discord_workshop_teamlead',
+        content: 'lead persona prompt',
+      },
+      {
+        id: 'service-department:workshop',
+        content: 'workshop department prompt',
+      },
+      {
+        id: 'service-roster:discord-workshop-teamlead',
+        content: expect.stringContaining('Lead: 작업실 팀장'),
+      },
+    ]);
+    expect(containerInput.instructionLayers[3].content).not.toContain(
+      'Teammate:',
+    );
+    expect(containerInput.subAgents).toBeUndefined();
+
+    emitOutputMarker(fakeProc, { status: 'success', result: 'ok' });
+    fakeProc.emit('close', 0);
+    await resultPromise;
   });
 });

@@ -6,7 +6,13 @@ export interface SubAgentEntry {
   apiKey?: string;
   baseUrl?: string;
   role?: string;
+  systemPrompt?: string;
   allowedTools?: string[];
+}
+
+export interface InstructionLayer {
+  id: string;
+  content: string;
 }
 
 export interface ContainerInput {
@@ -18,6 +24,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  instructionLayers?: InstructionLayer[];
   /** Sub-agents available via ask_agent MCP tool. */
   subAgents?: SubAgentEntry[];
 }

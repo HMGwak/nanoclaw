@@ -713,8 +713,10 @@ describe('workflow IPC handlers', () => {
           goal: 'Implement',
           acceptance_criteria: ['tests pass'],
           constraints: undefined,
+          stage_id: 'execute',
         },
       ],
+      'planning-workshop',
       'discord_planning',
       'other@g.us',
     );

@@ -32,6 +32,7 @@ describe('planning-workshop flow', () => {
         goal: 'Implement feature',
         acceptance_criteria: ['Tests pass'],
         constraints: undefined,
+        stage_id: 'execute',
       },
     ]);
   });

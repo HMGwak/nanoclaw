@@ -70,7 +70,11 @@ export function recordDiscordSharedVisibleReply(
 export function buildDiscordSharedContextBlock(
   group: RegisteredGroup,
   chatJid: string,
-  opts?: { beforeTimestamp?: string; limit?: number; includeOwnSender?: boolean },
+  opts?: {
+    beforeTimestamp?: string;
+    limit?: number;
+    includeOwnSender?: boolean;
+  },
 ): string {
   const scope = resolveDiscordSharedContextScope(group, chatJid);
   if (!scope) return '';

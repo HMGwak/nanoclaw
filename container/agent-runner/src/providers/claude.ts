@@ -8,9 +8,7 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 
 import {
-  readInstructionFile,
-  buildSharedSkillsInfo,
-  buildTeamInfo,
+  buildAgentPrompt,
 } from '../agent-instructions.js';
 import {
   AgentProvider,
@@ -290,18 +288,15 @@ async function runClaudeTurn(
   let messageCount = 0;
   let resultCount = 0;
 
-  // Load global instructions (AGENTS.md) + team info
+  // Build system prompt append from service/department layers plus
+  // run-local/global/shared guidance. The group AGENTS.md remains the
+  // room-local overlay loaded from the working directory.
   let globalClaudeMd: string | undefined;
-  if (!containerInput.isMain) {
-    const parts: string[] = [];
-    const globalInstr = readInstructionFile('/workspace/global');
-    if (globalInstr) parts.push(globalInstr);
-    const teamInfo = buildTeamInfo();
-    if (teamInfo) parts.push(teamInfo);
-    const sharedSkills = buildSharedSkillsInfo();
-    if (sharedSkills) parts.push(sharedSkills);
-    if (parts.length > 0) globalClaudeMd = parts.join('\n\n');
-  }
+  const appendedPrompt = buildAgentPrompt({
+    containerInput,
+    includeGroupOverlay: false,
+  }).trim();
+  if (appendedPrompt) globalClaudeMd = appendedPrompt;
 
   // Discover additional directories mounted at /workspace/extra/*
   const extraDirs: string[] = [];

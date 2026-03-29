@@ -167,6 +167,7 @@ function createSchema(database: Database.Database): void {
       title TEXT NOT NULL,
       source_group_folder TEXT NOT NULL,
       source_chat_jid TEXT NOT NULL,
+      flow_id TEXT,
       participants TEXT,
       status TEXT NOT NULL DEFAULT 'pending_confirmation',
       current_step_index INTEGER DEFAULT 0,
@@ -179,6 +180,7 @@ function createSchema(database: Database.Database): void {
       id TEXT PRIMARY KEY,
       workflow_id TEXT NOT NULL REFERENCES workflow_runs(id),
       step_index INTEGER NOT NULL,
+      stage_id TEXT,
       step_group TEXT,
       assignee_group_folder TEXT NOT NULL,
       assignee_chat_jid TEXT NOT NULL,
@@ -197,6 +199,18 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_wf_step_workflow ON workflow_step_runs(workflow_id);
     CREATE INDEX IF NOT EXISTS idx_wf_step_status ON workflow_step_runs(status);
   `);
+
+  // Workflow table migrations for existing databases.
+  try {
+    database.exec(`ALTER TABLE workflow_runs ADD COLUMN flow_id TEXT`);
+  } catch {
+    /* column already exists */
+  }
+  try {
+    database.exec(`ALTER TABLE workflow_step_runs ADD COLUMN stage_id TEXT`);
+  } catch {
+    /* column already exists */
+  }
 }
 
 export function initDatabase(): void {
@@ -455,7 +469,9 @@ export function appendSharedContextMessage(input: {
 }): void {
   const createdAt = input.createdAt || new Date().toISOString();
   const retentionLimit =
-    input.retentionLimit && input.retentionLimit > 0 ? input.retentionLimit : 30;
+    input.retentionLimit && input.retentionLimit > 0
+      ? input.retentionLimit
+      : 30;
 
   db.prepare(
     `INSERT INTO shared_context_messages (service, department_id, channel_key, sender_name, content, created_at)
@@ -822,6 +838,7 @@ export function createWorkflow(data: {
   sourceGroupFolder: string;
   sourceChatJid: string;
   planSteps: WorkflowPlanStep[];
+  flowId?: string;
 }): WorkflowRun {
   return workflowRepository().createWorkflow(data);
 }
@@ -846,6 +863,7 @@ export function getWorkflowsByStatus(status: WorkflowStatus): WorkflowRun[] {
 export function createWorkflowStep(data: {
   workflowId: string;
   stepIndex: number;
+  stageId?: string;
   assigneeGroupFolder: string;
   assigneeChatJid: string;
   goal: string;

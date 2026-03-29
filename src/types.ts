@@ -41,6 +41,8 @@ export interface SubAgentConfig {
   baseUrl?: string;
   /** Short role description shown to the primary agent (e.g., "Code reviewer"). */
   role?: string;
+  /** Optional system prompt preloaded into the delegated teammate. */
+  systemPrompt?: string;
   /** Optional per-agent tool allowlist. Undefined keeps the teammate text-only. */
   allowedTools?: string[];
 }
@@ -148,6 +150,7 @@ export interface WorkflowPlanStep {
   goal: string;
   acceptance_criteria?: string[];
   constraints?: string[];
+  stage_id?: string;
 }
 
 export interface WorkflowRun {
@@ -155,6 +158,7 @@ export interface WorkflowRun {
   title: string;
   source_group_folder: string;
   source_chat_jid: string;
+  flow_id: string | null;
   participants: string | null; // JSON array of assignee group folders
   status: WorkflowStatus;
   current_step_index: number;
@@ -168,6 +172,7 @@ export interface WorkflowStepRun {
   id: string;
   workflow_id: string;
   step_index: number;
+  stage_id: string | null;
   step_group: string | null; // reserved for parallel steps
   assignee_group_folder: string;
   assignee_chat_jid: string;

@@ -3,6 +3,7 @@ import path from 'path';
 import { DATA_DIR, GROUPS_DIR } from './config.js';
 
 const GROUP_FOLDER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const GROUP_RUN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const RESERVED_FOLDERS = new Set(['global']);
 
 export function isValidGroupFolder(folder: string): boolean {
@@ -41,4 +42,15 @@ export function resolveGroupIpcPath(folder: string): string {
   const ipcPath = path.resolve(ipcBaseDir, folder);
   ensureWithinBase(ipcBaseDir, ipcPath);
   return ipcPath;
+}
+
+export function resolveGroupRunPath(folder: string, runId: string): string {
+  assertValidGroupFolder(folder);
+  if (!GROUP_RUN_PATTERN.test(runId)) {
+    throw new Error(`Invalid workflow run id "${runId}"`);
+  }
+  const runBaseDir = path.resolve(GROUPS_DIR, folder, 'runs');
+  const runPath = path.resolve(runBaseDir, runId);
+  ensureWithinBase(runBaseDir, runPath);
+  return runPath;
 }

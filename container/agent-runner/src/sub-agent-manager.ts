@@ -21,6 +21,7 @@ interface AgentInfo {
   backend: string;
   model?: string;
   role?: string;
+  systemPrompt?: string;
   allowedTools?: string[];
 }
 
@@ -106,6 +107,9 @@ export class SubAgentManager {
     if (agent.entry.role) {
       systemParts.push(`You are ${agent.entry.role}.`);
     }
+    if (agent.entry.systemPrompt) {
+      systemParts.push(agent.entry.systemPrompt);
+    }
     if (systemPrompt) {
       systemParts.push(systemPrompt);
     }
@@ -146,6 +150,7 @@ export class SubAgentManager {
       backend: entry.backend,
       model: entry.model,
       role: entry.role,
+      systemPrompt: entry.systemPrompt,
       allowedTools: entry.allowedTools,
     }));
   }

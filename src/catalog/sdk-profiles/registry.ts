@@ -1,25 +1,15 @@
 import { SdkProfileSpec } from './types.js';
 
 const SDK_PROFILES: Record<string, SdkProfileSpec> = {
-  'workshop-teamleader-gpt': {
-    id: 'workshop-teamleader-gpt',
+  openai_gpt54: {
+    id: 'openai_gpt54',
     backend: 'openai',
     model: 'gpt-5.4',
   },
-  'workshop-teammate-kimi': {
-    id: 'workshop-teammate-kimi',
+  opencode_kimi_k25: {
+    id: 'opencode_kimi_k25',
     backend: 'opencode',
     model: 'opencode-go/kimi-k2.5',
-  },
-  'planning-lead-gpt': {
-    id: 'planning-lead-gpt',
-    backend: 'openai',
-    model: 'gpt-5.4',
-  },
-  'secretary-lead-gpt': {
-    id: 'secretary-lead-gpt',
-    backend: 'openai',
-    model: 'gpt-5.4',
   },
 };
 

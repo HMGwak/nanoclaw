@@ -18,6 +18,7 @@ export function createWorkflowRepository(db: Database.Database) {
       sourceGroupFolder: string;
       sourceChatJid: string;
       planSteps: WorkflowPlanStep[];
+      flowId?: string;
     }): WorkflowRun {
       const id = genId('wf');
       const now = new Date().toISOString();
@@ -27,13 +28,14 @@ export function createWorkflowRepository(db: Database.Database) {
       const planJson = JSON.stringify(data.planSteps);
 
       db.prepare(
-        `INSERT INTO workflow_runs (id, title, source_group_folder, source_chat_jid, participants, status, current_step_index, plan_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'pending_confirmation', 0, ?, ?, ?)`,
+        `INSERT INTO workflow_runs (id, title, source_group_folder, source_chat_jid, flow_id, participants, status, current_step_index, plan_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'pending_confirmation', 0, ?, ?, ?)`,
       ).run(
         id,
         data.title,
         data.sourceGroupFolder,
         data.sourceChatJid,
+        data.flowId || null,
         participants,
         planJson,
         now,
@@ -87,6 +89,7 @@ export function createWorkflowRepository(db: Database.Database) {
     createWorkflowStep(data: {
       workflowId: string;
       stepIndex: number;
+      stageId?: string;
       assigneeGroupFolder: string;
       assigneeChatJid: string;
       goal: string;
@@ -97,12 +100,13 @@ export function createWorkflowRepository(db: Database.Database) {
       const now = new Date().toISOString();
 
       db.prepare(
-        `INSERT INTO workflow_step_runs (id, workflow_id, step_index, assignee_group_folder, assignee_chat_jid, goal, acceptance_criteria, constraints, status, retry_count, max_retries, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 2, ?, ?)`,
+        `INSERT INTO workflow_step_runs (id, workflow_id, step_index, stage_id, assignee_group_folder, assignee_chat_jid, goal, acceptance_criteria, constraints, status, retry_count, max_retries, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 2, ?, ?)`,
       ).run(
         id,
         data.workflowId,
         data.stepIndex,
+        data.stageId || null,
         data.assigneeGroupFolder,
         data.assigneeChatJid,
         data.goal,

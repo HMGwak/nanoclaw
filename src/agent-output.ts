@@ -9,6 +9,10 @@ export interface NormalizedAgentOutput {
   sender?: string;
 }
 
+export interface NormalizeAgentOutputOptions {
+  enforceSingleSender?: boolean;
+}
+
 function escapeRegex(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -42,6 +46,18 @@ function stripSpeakerPrefix(text: string, sender?: string): string {
   if (!sender) return text.trim();
   const prefix = new RegExp(`^\\s*${escapeRegex(sender)}\\s*[:：]\\s*`, 'u');
   return text.replace(prefix, '').trim();
+}
+
+function stripAllSpeakerPrefixes(text: string, group: RegisteredGroup): string {
+  let normalized = text;
+  for (const name of configuredSpeakerNames(group)) {
+    const prefix = new RegExp(
+      `(^|\\n)\\s*${escapeRegex(name)}\\s*[:：]\\s*`,
+      'gu',
+    );
+    normalized = normalized.replace(prefix, '$1');
+  }
+  return normalized.trim();
 }
 
 function findSenderPrefix(
@@ -104,9 +120,68 @@ export function normalizeAgentOutputs(
   raw: string,
   group: RegisteredGroup,
   explicitSender?: string,
+  opts?: NormalizeAgentOutputOptions,
 ): NormalizedAgentOutput[] {
   const withoutInternal = stripInternalBlocks(raw);
   if (!withoutInternal) return [];
+
+  const enforceSingleSender = opts?.enforceSingleSender === true;
+
+  if (enforceSingleSender && explicitSender) {
+    const visibleBlocks = extractVisibleBlocks(withoutInternal);
+    if (visibleBlocks.length > 0) {
+      const ownBlocks = visibleBlocks.filter(
+        (block) =>
+          (block.sender || getLeadSenderName(group)).trim() ===
+          explicitSender.trim(),
+      );
+      if (ownBlocks.length > 0) {
+        return ownBlocks
+          .map((block) => stripSpeakerPrefix(block.text, explicitSender))
+          .filter((text) => text.length > 0)
+          .map((text) => ({ text, sender: explicitSender }));
+      }
+
+      const fallbackVisible = stripAllSpeakerPrefixes(
+        visibleBlocks[0].text,
+        group,
+      );
+      return fallbackVisible
+        ? [{ text: fallbackVisible, sender: explicitSender }]
+        : [];
+    }
+
+    const transcript = extractSpeakerTranscript(
+      withoutInternal,
+      group,
+      explicitSender,
+    );
+    if (transcript.length > 0) {
+      const ownSegments = transcript.filter(
+        (segment) => segment.sender?.trim() === explicitSender.trim(),
+      );
+      if (ownSegments.length > 0) {
+        return ownSegments.map((segment) => ({
+          text: segment.text,
+          sender: explicitSender,
+        }));
+      }
+
+      const fallbackSegment = stripAllSpeakerPrefixes(
+        transcript[0].text,
+        group,
+      );
+      return fallbackSegment
+        ? [{ text: fallbackSegment, sender: explicitSender }]
+        : [];
+    }
+
+    const stripped = stripAllSpeakerPrefixes(
+      stripSpeakerPrefix(withoutInternal, explicitSender),
+      group,
+    );
+    return stripped ? [{ text: stripped, sender: explicitSender }] : [];
+  }
 
   const visibleBlocks = extractVisibleBlocks(withoutInternal);
   if (visibleBlocks.length > 0) {
@@ -144,6 +219,7 @@ export function normalizeAgentOutput(
   raw: string,
   group: RegisteredGroup,
   explicitSender?: string,
+  opts?: NormalizeAgentOutputOptions,
 ): NormalizedAgentOutput | null {
-  return normalizeAgentOutputs(raw, group, explicitSender)[0] || null;
+  return normalizeAgentOutputs(raw, group, explicitSender, opts)[0] || null;
 }

@@ -6,6 +6,7 @@ import {
   isValidGroupFolder,
   resolveGroupFolderPath,
   resolveGroupIpcPath,
+  resolveGroupRunPath,
 } from './group-folder.js';
 
 describe('group folder validation', () => {
@@ -36,8 +37,18 @@ describe('group folder validation', () => {
     ).toBe(true);
   });
 
+  it('resolves safe run paths under group runs directory', () => {
+    const resolved = resolveGroupRunPath('family-chat', 'wf-123');
+    expect(
+      resolved.endsWith(
+        `${path.sep}groups${path.sep}family-chat${path.sep}runs${path.sep}wf-123`,
+      ),
+    ).toBe(true);
+  });
+
   it('throws for unsafe folder names', () => {
     expect(() => resolveGroupFolderPath('../../etc')).toThrow();
     expect(() => resolveGroupIpcPath('/tmp')).toThrow();
+    expect(() => resolveGroupRunPath('family-chat', '../wf')).toThrow();
   });
 });

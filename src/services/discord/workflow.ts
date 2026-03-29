@@ -1,12 +1,14 @@
 import { logger } from '../../logger.js';
-import { parsePlanningWorkshopSteps } from '../../catalog/flows/index.js';
+import { parseFlowSteps } from '../../catalog/flows/index.js';
 import { WorkflowPlanStep } from '../../types.js';
+import { getDiscordCanonicalGroupFolderForFolder } from './bindings/groups.js';
 import { canStartWorkflowFromGroup } from '../index.js';
 
 export interface DiscordWorkflowIpcDeps {
   onWorkflowRequested?: (
     title: string,
     steps: WorkflowPlanStep[],
+    flowId: string,
     sourceGroup: string,
     chatJid: string,
   ) => void;
@@ -21,6 +23,8 @@ export interface DiscordWorkflowIpcDeps {
 
 export interface DiscordWorkflowTaskPayload {
   title?: string;
+  flowId?: string;
+  flow_id?: string;
   steps?: unknown[];
   chatJid?: string;
   workflowId?: string;
@@ -48,14 +52,29 @@ export function handleDiscordWorkflowStart(
     return;
   }
 
-  const steps = parsePlanningWorkshopSteps(data.steps);
+  const flowIdRaw = data.flowId ?? data.flow_id;
+  const flowId =
+    typeof flowIdRaw === 'string' && flowIdRaw.trim().length > 0
+      ? flowIdRaw.trim()
+      : 'planning-workshop';
+  const steps = parseFlowSteps(flowId, data.steps).map((step) => ({
+    ...step,
+    assignee:
+      getDiscordCanonicalGroupFolderForFolder(step.assignee) || step.assignee,
+  }));
   if (steps.length === 0 || !deps.onWorkflowRequested) {
     return;
   }
 
-  deps.onWorkflowRequested(data.title, steps, sourceGroup, data.chatJid || '');
+  deps.onWorkflowRequested(
+    data.title,
+    steps,
+    flowId,
+    sourceGroup,
+    data.chatJid || '',
+  );
   logger.info(
-    { sourceGroup, title: data.title, stepCount: steps.length },
+    { sourceGroup, flowId, title: data.title, stepCount: steps.length },
     'Workflow requested via Discord service IPC',
   );
 }

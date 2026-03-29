@@ -13,6 +13,11 @@ import {
   cleanupWorkflowSnapshot,
   writePendingWorkflowSnapshot,
 } from './snapshots.js';
+import {
+  appendWorkflowStageMemoryRecord,
+  formatWorkflowMemorySummary,
+  readWorkflowStageMemoryRecords,
+} from './memory.js';
 import { WorkflowEngineDeps } from './types.js';
 
 export class WorkflowEngine {
@@ -37,6 +42,7 @@ export class WorkflowEngine {
     planSteps: import('../types.js').WorkflowPlanStep[],
     sourceGroupFolder: string,
     sourceChatJid: string,
+    flowId?: string,
   ): Promise<WorkflowRun> {
     const groups = this.deps.registeredGroups();
     for (const step of planSteps) {
@@ -55,6 +61,7 @@ export class WorkflowEngine {
       sourceGroupFolder,
       sourceChatJid,
       planSteps,
+      flowId,
     });
 
     for (const step of planSteps) {
@@ -65,6 +72,7 @@ export class WorkflowEngine {
       this.repository.createWorkflowStep({
         workflowId: workflow.id,
         stepIndex: step.step_index,
+        stageId: step.stage_id,
         assigneeGroupFolder: step.assignee,
         assigneeChatJid: assigneeJid,
         goal: step.goal,
@@ -92,7 +100,7 @@ export class WorkflowEngine {
     writePendingWorkflowSnapshot(this.repository, workflow.id);
 
     logger.info(
-      { workflowId: workflow.id, title, steps: planSteps.length },
+      { workflowId: workflow.id, flowId: flowId || null, title, steps: planSteps.length },
       'Workflow requested, awaiting confirmation',
     );
 
@@ -173,7 +181,11 @@ export class WorkflowEngine {
     );
 
     logger.info({ workflowId }, 'Workflow cancelled');
-    cleanupWorkflowSnapshot(workflow.source_group_folder, workflowId);
+    cleanupWorkflowSnapshot(
+      workflow.source_group_folder,
+      workflowId,
+      steps.map((step) => step.assignee_group_folder),
+    );
   }
 
   async onStepCompleted(
@@ -196,6 +208,17 @@ export class WorkflowEngine {
     if (!step) return;
 
     this.repository.updateWorkflowStep(step.id, {
+      status: 'completed',
+      result_summary: resultSummary,
+    });
+    appendWorkflowStageMemoryRecord(workflow.source_group_folder, workflowId, {
+      timestamp: new Date().toISOString(),
+      workflow_id: workflowId,
+      flow_id: workflow.flow_id,
+      step_id: step.id,
+      step_index: step.step_index,
+      stage_id: step.stage_id,
+      assignee_group_folder: step.assignee_group_folder,
       status: 'completed',
       result_summary: resultSummary,
     });
@@ -226,7 +249,11 @@ export class WorkflowEngine {
     );
 
     logger.info({ workflowId }, 'Workflow completed');
-    cleanupWorkflowSnapshot(workflow.source_group_folder, workflowId);
+    cleanupWorkflowSnapshot(
+      workflow.source_group_folder,
+      workflowId,
+      steps.map((candidate) => candidate.assignee_group_folder),
+    );
   }
 
   async onStepFailed(
@@ -243,6 +270,17 @@ export class WorkflowEngine {
     const steps = this.repository.getWorkflowSteps(workflowId);
     const step = steps.find((candidate) => candidate.step_index === stepIndex);
     if (!step) return;
+    appendWorkflowStageMemoryRecord(workflow.source_group_folder, workflowId, {
+      timestamp: new Date().toISOString(),
+      workflow_id: workflowId,
+      flow_id: workflow.flow_id,
+      step_id: step.id,
+      step_index: step.step_index,
+      stage_id: step.stage_id,
+      assignee_group_folder: step.assignee_group_folder,
+      status: 'failed',
+      result_summary: error,
+    });
 
     if (step.retry_count < step.max_retries) {
       const newRetryCount = step.retry_count + 1;
@@ -280,7 +318,11 @@ export class WorkflowEngine {
       { workflowId, stepIndex, error },
       'Workflow step failed after max retries',
     );
-    cleanupWorkflowSnapshot(workflow.source_group_folder, workflowId);
+    cleanupWorkflowSnapshot(
+      workflow.source_group_folder,
+      workflowId,
+      steps.map((candidate) => candidate.assignee_group_folder),
+    );
   }
 
   async checkExpiredLeases(): Promise<void> {
@@ -384,6 +426,15 @@ export class WorkflowEngine {
       return;
     }
 
+    const workflow = this.repository.getWorkflow(workflowId);
+    if (!workflow) {
+      logger.warn(
+        { workflowId, stepId: step.id },
+        'Cannot start step: workflow not found',
+      );
+      return;
+    }
+
     const now = new Date();
     const leaseExpires = new Date(now.getTime() + CONTAINER_TIMEOUT);
     this.repository.updateWorkflowStep(step.id, {
@@ -392,10 +443,22 @@ export class WorkflowEngine {
       lease_expires_at: leaseExpires.toISOString(),
     });
 
+    const memoryRecords = readWorkflowStageMemoryRecords(
+      workflow.source_group_folder,
+      workflowId,
+    );
+    const memorySummary = formatWorkflowMemorySummary({
+      records: memoryRecords,
+      currentStepIndex: step.step_index,
+    });
     const { prompt, context } = buildWorkflowStepPrompt(
       workflowId,
       step,
       previousResult,
+      {
+        flowId: workflow.flow_id,
+        memorySummary,
+      },
     );
     this.deps.enqueueWorkflowStep(
       step.assignee_chat_jid,

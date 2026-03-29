@@ -1,47 +1,44 @@
 import { RegisteredGroup } from '../../types.js';
+import {
+  getDiscordGroupBindingForGroup,
+  listDiscordGroupBindings,
+} from './bindings/groups.js';
 import { DiscordServiceDeploymentSpec } from './types.js';
 
-const DISCORD_DEPLOYMENTS: DiscordServiceDeploymentSpec[] = [
-  {
-    id: 'discord-workshop',
-    groupFolders: ['discord_workshop'],
-    leadAgentId: 'workshop-teamleader-gpt',
-    teammateAgentIds: ['workshop-teammate-kimi'],
-    flowIds: ['planning-workshop'],
-    senderBotMap: {
-      '작업실 팀장': 'workshop',
-      키미: 'kimi',
-    },
-    personaMode: 'bot_only',
-  },
-  {
-    id: 'discord-planning',
-    groupFolders: ['discord_planning'],
-    leadAgentId: 'planning-lead',
-    teammateAgentIds: [],
-    flowIds: ['planning-workshop'],
-    canStartWorkflow: true,
-  },
-  {
-    id: 'discord-secretary',
-    groupFolders: ['discord_secretary', 'main'],
-    leadAgentId: 'secretary-lead',
-    teammateAgentIds: [],
-    flowIds: [],
-  },
-];
+function toDeploymentSpec(
+  binding: ReturnType<typeof getDiscordGroupBindingForGroup>,
+): DiscordServiceDeploymentSpec | null {
+  if (!binding) return null;
+  return {
+    id: binding.id,
+    departmentId: binding.departmentId,
+    botLabel: binding.botLabel,
+    canonicalGroupFolder: binding.canonicalGroupFolder,
+    groupFolders: [...binding.groupFolders],
+    leadPersonnelId: binding.leadPersonnelId,
+    teammatePersonnelIds: [...binding.teammatePersonnelIds],
+    flowIds: [...binding.flowIds],
+    senderBotMap: binding.senderBotMap
+      ? { ...binding.senderBotMap }
+      : undefined,
+    personaMode: binding.personaMode,
+    responsePolicy: binding.responsePolicy,
+    requiresTrigger: binding.requiresTrigger,
+    canStartWorkflow: binding.canStartWorkflow,
+  };
+}
 
 export function getDiscordDeploymentForGroup(
   group: RegisteredGroup | string,
 ): DiscordServiceDeploymentSpec | null {
-  const folder = typeof group === 'string' ? group : group.folder;
-  return (
-    DISCORD_DEPLOYMENTS.find((deployment) =>
-      deployment.groupFolders.includes(folder),
-    ) || null
-  );
+  return toDeploymentSpec(getDiscordGroupBindingForGroup(group));
 }
 
 export function listDiscordDeployments(): DiscordServiceDeploymentSpec[] {
-  return [...DISCORD_DEPLOYMENTS];
+  return listDiscordGroupBindings()
+    .map((binding) => toDeploymentSpec(binding))
+    .filter(
+      (deployment): deployment is DiscordServiceDeploymentSpec =>
+        deployment !== null,
+    );
 }

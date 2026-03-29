@@ -1,16 +1,15 @@
 import { ToolsetSpec } from './types.js';
 
 const TOOLSETS: Record<string, ToolsetSpec> = {
-  'workshop-teamleader-default': {
-    id: 'workshop-teamleader-default',
-    description: 'Default unrestricted toolset for the workshop team leader.',
+  global_general_cli: {
+    id: 'global_general_cli',
+    description: 'General-purpose global toolset for planning and execution.',
     allowedTools: null,
     skillIds: ['agent-browser'],
   },
-  'workshop-teammate-kimi-research': {
-    id: 'workshop-teammate-kimi-research',
-    description:
-      'Browser-first research toolset for Kimi inside the workshop team.',
+  global_browser_research: {
+    id: 'global_browser_research',
+    description: 'Browser-first global research toolset.',
     allowedTools: [
       'web_search',
       'web_fetch',
@@ -31,17 +30,6 @@ const TOOLSETS: Record<string, ToolsetSpec> = {
     ],
     skillIds: ['agent-browser'],
     sourceModuleIds: ['autoresearch'],
-  },
-  'planning-default': {
-    id: 'planning-default',
-    description: 'Planning lead toolset.',
-    allowedTools: null,
-    skillIds: ['agent-browser'],
-  },
-  'secretary-default': {
-    id: 'secretary-default',
-    description: 'Secretary lead toolset.',
-    allowedTools: null,
   },
 };
 

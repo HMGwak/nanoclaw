@@ -502,6 +502,12 @@ server.tool(
   'Start a workflow from the planning room. Assigns steps to workers and tracks progress end-to-end.',
   {
     title: z.string().describe('Workflow title'),
+    flow_id: z
+      .string()
+      .optional()
+      .describe(
+        'Optional flow identifier. Defaults to "planning-workshop". Use "experiment-loop" for experiment-stage workflows.',
+      ),
     steps: z
       .array(
         z.object({
@@ -510,13 +516,19 @@ server.tool(
             .describe('The worker or role assigned to this step'),
           goal: z.string().describe('What this step must accomplish'),
           acceptance_criteria: z
-            .string()
+            .union([z.string(), z.array(z.string())])
             .optional()
             .describe('Conditions that define success for this step'),
           constraints: z
-            .string()
+            .union([z.string(), z.array(z.string())])
             .optional()
             .describe('Constraints or guardrails for this step'),
+          stage_id: z
+            .string()
+            .optional()
+            .describe(
+              'Optional flow stage id for stage-aware memory and prompt routing.',
+            ),
         }),
       )
       .describe('Ordered list of steps to execute'),
@@ -540,6 +552,7 @@ server.tool(
       type: 'start_workflow',
       workflowId,
       title: args.title,
+      flowId: args.flow_id || 'planning-workshop',
       steps: args.steps,
       groupFolder,
       chatJid,

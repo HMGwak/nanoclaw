@@ -39,6 +39,8 @@ interface DiscordWebhook {
   send: (opts: { content: string; username?: string }) => Promise<unknown>;
 }
 
+const BOT_LOGIN_TIMEOUT_MS = 30_000;
+
 export class DiscordChannel implements Channel {
   name = 'discord';
 
@@ -301,11 +303,39 @@ export class DiscordChannel implements Channel {
       this.setupMessageHandler(this.bots[i], i === 0);
     }
 
+    logger.debug(
+      {
+        botCount: this.bots.length,
+        labels: this.bots.map((bot) => bot.label),
+      },
+      'Starting Discord bot connections',
+    );
+
     // Connect all bots
     const connectPromises = this.bots.map(
       (bot) =>
-        new Promise<void>((resolve) => {
+        new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const timeout = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            const error = new Error(
+              `Discord bot login timed out after ${BOT_LOGIN_TIMEOUT_MS}ms`,
+            );
+            logger.error(
+              {
+                label: bot.label,
+                timeoutMs: BOT_LOGIN_TIMEOUT_MS,
+              },
+              'Discord bot login timed out',
+            );
+            reject(error);
+          }, BOT_LOGIN_TIMEOUT_MS);
+
           bot.client.once(Events.ClientReady, (readyClient) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
             bot.botUserId = readyClient.user.id;
             logger.info(
               {
@@ -323,11 +353,32 @@ export class DiscordChannel implements Channel {
             );
             resolve();
           });
-          bot.client.login(bot.token);
+
+          logger.debug({ label: bot.label }, 'Discord bot login starting');
+
+          bot.client.login(bot.token).catch((err) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            logger.error({ err, label: bot.label }, 'Discord bot login failed');
+            reject(err);
+          });
         }),
     );
 
-    await Promise.all(connectPromises);
+    const results = await Promise.allSettled(connectPromises);
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result.status === 'rejected') {
+        logger.error(
+          {
+            label: this.bots[i]?.label,
+            err: result.reason,
+          },
+          'Discord bot connection failed',
+        );
+      }
+    }
   }
 
   private async getOrCreateWebhook(
@@ -537,6 +588,10 @@ registerChannel('discord', (opts: ChannelOpts) => {
   const envVars = readEnvFile(['DISCORD_BOT_TOKEN']);
   const token =
     process.env.DISCORD_BOT_TOKEN || envVars.DISCORD_BOT_TOKEN || '';
+  logger.debug(
+    { hasPrimaryToken: Boolean(token) },
+    'Discord primary token presence checked',
+  );
   if (!token) {
     logger.warn('Discord: DISCORD_BOT_TOKEN not set');
     return null;

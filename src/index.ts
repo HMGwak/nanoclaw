@@ -831,10 +831,10 @@ async function main(): Promise<void> {
         writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
       }
     },
-    onWorkflowRequested: (title, steps, sourceGroup, chatJid) => {
+    onWorkflowRequested: (title, steps, flowId, sourceGroup, chatJid) => {
       if (workflowEngine) {
         workflowEngine
-          .requestWorkflow(title, steps, sourceGroup, chatJid)
+          .requestWorkflow(title, steps, sourceGroup, chatJid, flowId)
           .catch((err) =>
             logger.error({ err, title }, 'Failed to create workflow'),
           );

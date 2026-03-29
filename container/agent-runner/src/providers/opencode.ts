@@ -23,9 +23,8 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 
 import {
-  findInstructionFile,
-  buildSharedSkillsInfo,
-  buildTeamInfo,
+  buildInstructionSections,
+  materializeInstructionFiles,
 } from '../agent-instructions.js';
 import {
   AgentProvider,
@@ -80,35 +79,18 @@ function writeConfig(
         },
       },
     },
-    // Load group instructions (AGENTS.md)
     instructions: [] as string[],
   };
 
-  const groupInstr = findInstructionFile(WORK_DIR);
-  if (groupInstr) {
-    (config.instructions as string[]).push(groupInstr);
-  }
-
-  // Also load global instructions if available
-  const globalInstr = findInstructionFile('/workspace/global');
-  if (globalInstr) {
-    (config.instructions as string[]).push(globalInstr);
-  }
-
-  // Append team info as an inline instruction file if sub-agents are configured
-  const teamInfo = buildTeamInfo();
-  if (teamInfo) {
-    const teamInfoPath = path.join(CONFIG_DIR, 'team-info.md');
-    fs.writeFileSync(teamInfoPath, teamInfo);
-    (config.instructions as string[]).push(teamInfoPath);
-  }
-
-  const sharedSkills = buildSharedSkillsInfo();
-  if (sharedSkills) {
-    const sharedSkillsPath = path.join(CONFIG_DIR, 'shared-skills.md');
-    fs.writeFileSync(sharedSkillsPath, sharedSkills);
-    (config.instructions as string[]).push(sharedSkillsPath);
-  }
+  const instructionSections = buildInstructionSections({
+    containerInput: ctx.containerInput,
+    defaultPrompt:
+      'You are an AI assistant. Use shell for local commands, web_fetch for known URLs, web_search for current information, agent-browser for most interactive browsing, and Playwright only as a heavier fallback.',
+  });
+  const instructionDir = path.join(CONFIG_DIR, '.opencode', 'instructions');
+  (config.instructions as string[]).push(
+    ...materializeInstructionFiles(instructionSections, instructionDir),
+  );
 
   const configPath = path.join(CONFIG_DIR, 'opencode.jsonc');
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));

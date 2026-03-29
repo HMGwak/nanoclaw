@@ -20,6 +20,10 @@ import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { normalizeAgentOutputs } from './agent-output.js';
+import {
+  resolveGroupTargetSender,
+  shouldEnforceSingleSender,
+} from './services/index.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
 /**
@@ -192,7 +196,15 @@ async function runTask(
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          const outputs = normalizeAgentOutputs(streamedOutput.result, group);
+          const targetSender = resolveGroupTargetSender(group, task.chat_jid);
+          const outputs = normalizeAgentOutputs(
+            streamedOutput.result,
+            group,
+            targetSender,
+            {
+              enforceSingleSender: shouldEnforceSingleSender(group),
+            },
+          );
           for (const output of outputs) {
             await deps.sendMessage(task.chat_jid, output.text, {
               sender: output.sender,

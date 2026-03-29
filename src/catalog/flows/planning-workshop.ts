@@ -32,6 +32,19 @@ export const PLANNING_WORKSHOP_FLOW: FlowSpec = {
   ],
 };
 
+function toStringList(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) {
+    const normalized = value.filter(
+      (item): item is string => typeof item === 'string' && item.trim().length > 0,
+    );
+    return normalized.length > 0 ? normalized : undefined;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return [value.trim()];
+  }
+  return undefined;
+}
+
 export function parsePlanningWorkshopSteps(
   steps: unknown[],
 ): WorkflowPlanStep[] {
@@ -39,16 +52,27 @@ export function parsePlanningWorkshopSteps(
     steps as Array<{
       assignee?: string;
       goal?: string;
-      acceptance_criteria?: string[];
-      constraints?: string[];
+      acceptance_criteria?: string[] | string;
+      constraints?: string[] | string;
+      stage_id?: string;
     }>
   )
-    .filter((step) => step.assignee && step.goal)
+    .filter(
+      (step) =>
+        typeof step.assignee === 'string' &&
+        step.assignee.trim().length > 0 &&
+        typeof step.goal === 'string' &&
+        step.goal.trim().length > 0,
+    )
     .map((step, index) => ({
       step_index: index,
-      assignee: step.assignee!,
-      goal: step.goal!,
-      acceptance_criteria: step.acceptance_criteria,
-      constraints: step.constraints,
+      assignee: step.assignee!.trim(),
+      goal: step.goal!.trim(),
+      acceptance_criteria: toStringList(step.acceptance_criteria),
+      constraints: toStringList(step.constraints),
+      stage_id:
+        typeof step.stage_id === 'string' && step.stage_id.trim().length > 0
+          ? step.stage_id.trim()
+          : 'execute',
     }));
 }

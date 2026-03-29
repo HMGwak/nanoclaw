@@ -13,12 +13,32 @@ export interface AgentTeamSpec {
   speakerNames: string[];
 }
 
+function buildTeammateSystemPrompt(
+  teammate: ResolvedAgentRuntimeSpec,
+  departmentPrompt: string | null,
+): string | undefined {
+  const parts = [
+    teammate.capabilityPrompt,
+    teammate.personaPrompt,
+    departmentPrompt,
+  ].filter((part): part is string => Boolean(part && part.trim()));
+  if (parts.length === 0) return undefined;
+  return parts.join('\n\n');
+}
+
 export function buildGroupAgentTeam(group: RegisteredGroup): AgentTeamSpec {
   const deployment = resolveServiceDeployment(group);
   return {
     lead: deployment?.lead || null,
     teammates: deployment?.teammates || [],
-    teammateConfigs: deployment?.teammates || [],
+    teammateConfigs:
+      deployment?.teammates.map((teammate) => ({
+        ...teammate,
+        systemPrompt: buildTeammateSystemPrompt(
+          teammate,
+          deployment.departmentPrompt,
+        ),
+      })) || [],
     speakerNames: resolveGroupSpeakerNames(group),
   };
 }

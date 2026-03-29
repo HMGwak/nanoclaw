@@ -1,0 +1,7 @@
+{
+  "id": "entireio_cli",
+  "origin": "github-upstream-derived",
+  "version": "snapshot-2026-03-29",
+  "license": "MIT",
+  "notes": "Upstream: https://github.com/entireio/cli @ 3854dcb5917a4b9c197120958c15a99a1555453b"
+}

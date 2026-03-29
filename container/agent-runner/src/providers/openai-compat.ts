@@ -58,7 +58,7 @@ function saveSessionState(sessionId: string, state: SessionState): void {
 
 function buildSystemPrompt(context: AgentTurnContext): string {
   return buildAgentPrompt({
-    isMain: context.containerInput.isMain,
+    containerInput: context.containerInput,
     defaultPrompt:
       'You are an AI assistant. Use shell for local commands, web_fetch for known URLs, web_search for current information, agent-browser for most interactive browsing, and Playwright only as a heavier fallback.',
   });

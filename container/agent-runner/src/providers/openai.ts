@@ -57,7 +57,7 @@ function saveSessionState(sessionId: string, state: SessionState): void {
 
 function buildSystemPrompt(context: AgentTurnContext): string {
   const base = buildAgentPrompt({
-    isMain: context.containerInput.isMain,
+    containerInput: context.containerInput,
     defaultPrompt:
       'You are an AI assistant with browser automation tools. Prefer web_search/web_fetch first, then agent-browser for most browsing tasks, and use Playwright only as a heavier fallback.',
   });
