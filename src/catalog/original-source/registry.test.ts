@@ -29,6 +29,18 @@ describe('original source manifest registry', () => {
       id: 'entireio_cli',
       origin: 'github-upstream-derived',
     });
+    expect(getOriginalSourceManifest('cloudflare_browser_rendering')).toMatchObject({
+      id: 'cloudflare_browser_rendering',
+      origin: 'vendor-docs-derived',
+    });
+    expect(getOriginalSourceManifest('vercel_agent_browser')).toMatchObject({
+      id: 'vercel_agent_browser',
+      origin: 'tooling-docs-derived',
+    });
+    expect(getOriginalSourceManifest('playwright')).toMatchObject({
+      id: 'playwright',
+      origin: 'npm-package-derived',
+    });
   });
 
   it('keeps autoresearch snapshot provenance pinned to a concrete upstream commit', () => {

@@ -412,6 +412,19 @@ async function buildContainerArgs(
   if (leadAllowedTools && leadAllowedTools.length > 0) {
     args.push('-e', `NANOCLAW_ALLOWED_TOOLS=${leadAllowedTools.join(',')}`);
   }
+  if (runtimeCfg?.browserPolicy) {
+    args.push(
+      '-e',
+      `NANOCLAW_BROWSER_POLICY=${JSON.stringify(runtimeCfg.browserPolicy)}`,
+    );
+  }
+
+  // Optional Cloudflare Browser Rendering credentials for cloudflare_fetch tool
+  const cfEnv = readEnvFile(['CF_ACCOUNT_ID', 'CF_API_TOKEN']);
+  const cfAccountId = process.env.CF_ACCOUNT_ID || cfEnv.CF_ACCOUNT_ID;
+  const cfApiToken = process.env.CF_API_TOKEN || cfEnv.CF_API_TOKEN;
+  if (cfAccountId) args.push('-e', `CF_ACCOUNT_ID=${cfAccountId}`);
+  if (cfApiToken) args.push('-e', `CF_API_TOKEN=${cfApiToken}`);
 
   if (backend === 'claude') {
     // OneCLI gateway handles credential injection — containers never see real secrets.

@@ -17,6 +17,7 @@ describe('agent factory', () => {
     expect(team.lead?.displayName).toBe('작업실 팀장');
     expect(team.lead?.toolsetIds).toEqual([
       'global_general_cli',
+      'global_browser_research',
       'discord_workshop_lead_local',
     ]);
     expect(team.teammates).toHaveLength(0);

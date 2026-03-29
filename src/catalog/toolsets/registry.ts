@@ -9,10 +9,12 @@ const TOOLSETS: Record<string, ToolsetSpec> = {
   },
   global_browser_research: {
     id: 'global_browser_research',
-    description: 'Browser-first global research toolset.',
+    description:
+      'Browser-first global research toolset with enforced Cloudflare -> agent-browser -> Playwright progression.',
     allowedTools: [
       'web_search',
       'web_fetch',
+      'cloudflare_fetch',
       'browse_open',
       'browse_click',
       'browse_fill',
@@ -29,7 +31,17 @@ const TOOLSETS: Record<string, ToolsetSpec> = {
       'playwright_pdf',
     ],
     skillIds: ['agent-browser'],
-    sourceModuleIds: ['autoresearch'],
+    sourceModuleIds: [
+      'cloudflare_browser_rendering',
+      'vercel_agent_browser',
+      'playwright',
+    ],
+    browserPolicy: {
+      id: 'browser_stack_v1',
+      enforcement: 'hard',
+      chain: ['cloudflare_fetch', 'agent_browser', 'playwright'],
+      supplementalTools: ['web_search', 'web_fetch'],
+    },
   },
 };
 

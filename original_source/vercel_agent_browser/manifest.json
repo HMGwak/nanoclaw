@@ -1,0 +1,7 @@
+{
+  "id": "vercel_agent_browser",
+  "origin": "tooling-docs-derived",
+  "version": "snapshot-2026-03-29",
+  "license": "unknown",
+  "notes": "Preserved CLI interaction contract for agent-browser usage in NanoClaw browser workflows."
+}

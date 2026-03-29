@@ -31,6 +31,9 @@ describe('service deployment resolution', () => {
     );
     expect(deployment?.leadPrompt).toContain('작업실 팀장');
     expect(deployment?.leadPrompt).toContain('pragmatic and direct');
+    expect(deployment?.lead?.toolsetIds).toContain('global_browser_research');
+    expect(deployment?.lead?.browserPolicy?.id).toBe('browser_stack_v1');
+    expect(deployment?.lead?.browserPolicy?.enforcement).toBe('hard');
     expect(deployment?.departmentPrompt).toContain(
       'Discord Workshop Department',
     );
@@ -124,12 +127,13 @@ describe('service deployment resolution', () => {
     expect(planningDeployment?.leadPrompt).toContain(
       'skeptical of fuzzy requirements',
     );
+    expect(planningDeployment?.lead?.toolsetIds).toContain(
+      'global_browser_research',
+    );
     expect(planningDeployment?.leadPrompt).toContain(
       'workflow-first coordinator',
     );
-    expect(planningDeployment?.leadPrompt).toContain(
-      'confirms user intent',
-    );
+    expect(planningDeployment?.leadPrompt).toContain('confirms user intent');
     expect(planningDeployment?.departmentPrompt).toContain(
       'Discord Planning Department',
     );
@@ -138,6 +142,9 @@ describe('service deployment resolution', () => {
     );
     expect(secretaryDeployment?.leadPrompt).toContain('비서실');
     expect(secretaryDeployment?.leadPrompt).toContain('concise and composed');
+    expect(secretaryDeployment?.lead?.toolsetIds).toContain(
+      'global_browser_research',
+    );
     expect(secretaryDeployment?.departmentPrompt).toContain(
       'Discord Secretary Department',
     );
@@ -153,5 +160,29 @@ describe('service deployment resolution', () => {
     expect(canStartWorkflowFromGroup('discord_workshop_teamlead')).toBe(false);
     expect(canStartWorkflowFromGroup('discord_secretary')).toBe(false);
     expect(canStartWorkflowFromGroup('any-group')).toBe(false);
+  });
+
+  it('injects browser policy required tools into legacy group allowlist overrides', () => {
+    const overriddenGroup: RegisteredGroup = {
+      name: '작업실',
+      folder: 'discord_workshop',
+      trigger: '@작업실',
+      added_at: '2026-01-01T00:00:00Z',
+      containerConfig: {
+        allowedTools: ['shell', 'web_search', 'web_fetch'],
+      },
+    };
+
+    const deployment = resolveServiceDeployment(overriddenGroup);
+    expect(deployment?.containerRuntime.allowedTools).toEqual(
+      expect.arrayContaining([
+        'shell',
+        'web_search',
+        'web_fetch',
+        'cloudflare_fetch',
+        'browse_open',
+        'playwright_open',
+      ]),
+    );
   });
 });

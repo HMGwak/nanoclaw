@@ -1,0 +1,7 @@
+{
+  "id": "cloudflare_browser_rendering",
+  "origin": "vendor-docs-derived",
+  "version": "snapshot-2026-03-29",
+  "license": "Cloudflare docs terms",
+  "notes": "Preserved from Cloudflare Browser Rendering REST API docs. Primary reference: /browser-rendering/content endpoint."
+}

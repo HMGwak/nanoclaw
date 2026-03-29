@@ -85,7 +85,7 @@ function writeConfig(
   const instructionSections = buildInstructionSections({
     containerInput: ctx.containerInput,
     defaultPrompt:
-      'You are an AI assistant. Use shell for local commands, web_fetch for known URLs, web_search for current information, agent-browser for most interactive browsing, and Playwright only as a heavier fallback.',
+      'You are an AI assistant. Use shell for local commands, and for URL retrieval use cloudflare_fetch first when available, then agent-browser for interactive browsing, and Playwright only as a heavier fallback.',
   });
   const instructionDir = path.join(CONFIG_DIR, '.opencode', 'instructions');
   (config.instructions as string[]).push(

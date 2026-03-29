@@ -4,6 +4,8 @@
  */
 
 import { execFile } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 import { promisify } from 'util';
 import { loadSubAgentManager } from '../sub-agent-manager.js';
 import {
@@ -42,6 +44,9 @@ export function truncateOutput(text: string): string {
 interface ExecutorContext {
   log: (msg: string) => void;
   env: Record<string, string | undefined>;
+  chatJid?: string;
+  groupFolder?: string;
+  isMain?: boolean;
 }
 
 function getSubAgentManager() {
@@ -113,6 +118,20 @@ async function runWebFetch(
   const url = args.url?.trim();
   if (!url) return JSON.stringify({ ok: false, error: 'No URL' });
 
+  // Browser Rendering first when credentials are present.
+  const cfReady = Boolean(
+    ctx.env.CF_ACCOUNT_ID?.trim() && ctx.env.CF_API_TOKEN?.trim(),
+  );
+  if (cfReady) {
+    const cfResult = await runCloudflareFetch(argsJson, ctx);
+    try {
+      const parsed = JSON.parse(cfResult) as { ok?: boolean };
+      if (parsed.ok) return cfResult;
+    } catch {
+      // Ignore parse failure and continue to curl fallback.
+    }
+  }
+
   ctx.log(`web_fetch: ${url}`);
   const env = Object.fromEntries(
     Object.entries(ctx.env).filter(
@@ -142,6 +161,116 @@ async function runWebFetch(
   }
 }
 
+async function runCloudflareFetch(
+  argsJson: string,
+  ctx: ExecutorContext,
+): Promise<string> {
+  let args: { url: string };
+  try {
+    args = JSON.parse(argsJson);
+  } catch {
+    return JSON.stringify({ ok: false, error: 'Invalid JSON' });
+  }
+  const url = args.url?.trim();
+  if (!url) return JSON.stringify({ ok: false, error: 'No URL' });
+
+  const accountId = ctx.env.CF_ACCOUNT_ID?.trim();
+  const apiToken = ctx.env.CF_API_TOKEN?.trim();
+  if (!accountId || !apiToken) {
+    return JSON.stringify({
+      ok: false,
+      provider: 'cloudflare-browser-rendering',
+      error: 'CF_ACCOUNT_ID or CF_API_TOKEN is not configured.',
+    });
+  }
+
+  ctx.log(`cloudflare_fetch: ${url}`);
+  const endpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/browser-rendering/content`;
+  const payload = JSON.stringify({
+    url,
+    gotoOptions: { waitUntil: 'networkidle2' },
+  });
+  const env = Object.fromEntries(
+    Object.entries(ctx.env).filter(
+      (e): e is [string, string] => typeof e[1] === 'string',
+    ),
+  );
+
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      '/usr/bin/curl',
+      [
+        '-L',
+        '--silent',
+        '--show-error',
+        '--max-time',
+        '60',
+        '-X',
+        'POST',
+        endpoint,
+        '-H',
+        `Authorization: Bearer ${apiToken}`,
+        '-H',
+        'Content-Type: application/json',
+        '--data',
+        payload,
+      ],
+      {
+        cwd: '/workspace/group',
+        timeout: DEFAULT_WEB_TIMEOUT_MS * 2,
+        maxBuffer: MAX_TOOL_OUTPUT_CHARS * 2,
+        env,
+      },
+    );
+
+    try {
+      const parsed = JSON.parse(stdout) as {
+        success?: boolean;
+        errors?: Array<{ message?: string }>;
+        result?: unknown;
+      };
+      if (parsed.success === false) {
+        const errorMessage =
+          parsed.errors?.map((e) => e.message).filter(Boolean).join('; ') ||
+          'Cloudflare Browser Rendering request failed';
+        return JSON.stringify({
+          ok: false,
+          provider: 'cloudflare-browser-rendering',
+          url,
+          error: errorMessage,
+        });
+      }
+      const rendered =
+        typeof parsed.result === 'string'
+          ? parsed.result
+          : JSON.stringify(parsed.result ?? parsed);
+      return JSON.stringify({
+        ok: true,
+        provider: 'cloudflare-browser-rendering',
+        url,
+        body: truncateOutput(rendered),
+        stderr: truncateOutput(stderr),
+      });
+    } catch {
+      return JSON.stringify({
+        ok: true,
+        provider: 'cloudflare-browser-rendering',
+        url,
+        body: truncateOutput(stdout),
+        stderr: truncateOutput(stderr),
+      });
+    }
+  } catch (err) {
+    const e = err as { message?: string };
+    return JSON.stringify({
+      ok: false,
+      provider: 'cloudflare-browser-rendering',
+      url,
+      error: e.message,
+    });
+  }
+}
+
 async function runWebSearch(
   argsJson: string,
   ctx: ExecutorContext,
@@ -154,12 +283,43 @@ async function runWebSearch(
   }
   const query = args.query?.trim();
   if (!query) return JSON.stringify({ ok: false, error: 'No query' });
-  return runWebFetch(
+  const fetched = await runWebFetch(
     JSON.stringify({
       url: `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
     }),
     ctx,
   );
+
+  // DuckDuckGo sometimes returns anti-bot challenge pages.
+  // Returning this as a normal "ok" body makes the model think search succeeded.
+  // Detect known challenge markers and force the model to switch to browser tools.
+  try {
+    const parsed = JSON.parse(fetched) as {
+      ok?: boolean;
+      body?: string;
+      url?: string;
+    };
+    const body = (parsed.body || '').toLowerCase();
+    const blocked =
+      body.includes('anomaly.js') ||
+      body.includes('automated traffic') ||
+      body.includes('verify you are human') ||
+      body.includes('duckduckgo.com/anomaly') ||
+      body.includes('bot challenge');
+    if (parsed.ok && blocked) {
+      return JSON.stringify({
+        ok: false,
+        provider: 'duckduckgo',
+        error: 'search provider blocked by anti-bot challenge',
+        hint: 'Use cloudflare_fetch on a direct trusted source URL, then fall back to browse_open and Playwright only if needed.',
+        url: parsed.url,
+      });
+    }
+  } catch {
+    // Ignore parse failures and return the raw fetch output.
+  }
+
+  return fetched;
 }
 
 async function runListAgents(ctx: ExecutorContext): Promise<string> {
@@ -219,6 +379,141 @@ async function runAskAgent(
   }
 }
 
+const IPC_TASKS_DIR = '/workspace/ipc/tasks';
+
+function writeIpcTask(data: Record<string, unknown>): string {
+  fs.mkdirSync(IPC_TASKS_DIR, { recursive: true });
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+  const filepath = path.join(IPC_TASKS_DIR, filename);
+  const tempPath = `${filepath}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(data, null, 2));
+  fs.renameSync(tempPath, filepath);
+  return filename;
+}
+
+async function runStartWorkflow(
+  argsJson: string,
+  ctx: ExecutorContext,
+): Promise<string> {
+  let args: {
+    title: string;
+    flow_id?: string;
+    steps: Array<{
+      assignee: string;
+      goal: string;
+      acceptance_criteria?: string | string[];
+      constraints?: string | string[];
+      stage_id?: string;
+    }>;
+  };
+  try {
+    args = JSON.parse(argsJson);
+  } catch {
+    return JSON.stringify({ ok: false, error: 'Invalid JSON' });
+  }
+  if (!args.title?.trim()) {
+    return JSON.stringify({ ok: false, error: 'title is required' });
+  }
+  if (!Array.isArray(args.steps) || args.steps.length === 0) {
+    return JSON.stringify({ ok: false, error: 'steps must be a non-empty array' });
+  }
+  if (!ctx.chatJid) {
+    return JSON.stringify({
+      ok: false,
+      error: 'chatJid is unavailable in this runtime; cannot start workflow',
+    });
+  }
+
+  const workflowId = `wf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  writeIpcTask({
+    type: 'start_workflow',
+    workflowId,
+    title: args.title.trim(),
+    flowId: args.flow_id || 'planning-workshop',
+    steps: args.steps,
+    chatJid: ctx.chatJid,
+    groupFolder: ctx.groupFolder,
+    timestamp: new Date().toISOString(),
+  });
+
+  return JSON.stringify({
+    ok: true,
+    workflowId,
+    message: `Workflow "${args.title.trim()}" requested.`,
+  });
+}
+
+async function runReportResult(
+  argsJson: string,
+  ctx: ExecutorContext,
+): Promise<string> {
+  let args: {
+    workflow_id: string;
+    step_index: number;
+    status: 'completed' | 'failed';
+    result_summary: string;
+  };
+  try {
+    args = JSON.parse(argsJson);
+  } catch {
+    return JSON.stringify({ ok: false, error: 'Invalid JSON' });
+  }
+  if (!args.workflow_id?.trim()) {
+    return JSON.stringify({ ok: false, error: 'workflow_id is required' });
+  }
+  if (!Number.isInteger(args.step_index) || args.step_index < 0) {
+    return JSON.stringify({ ok: false, error: 'step_index must be a non-negative integer' });
+  }
+  if (args.status !== 'completed' && args.status !== 'failed') {
+    return JSON.stringify({ ok: false, error: 'status must be completed or failed' });
+  }
+  if (!args.result_summary?.trim()) {
+    return JSON.stringify({ ok: false, error: 'result_summary is required' });
+  }
+
+  writeIpcTask({
+    type: 'report_result',
+    workflowId: args.workflow_id.trim(),
+    stepIndex: args.step_index,
+    status: args.status,
+    resultSummary: args.result_summary.trim(),
+    groupFolder: ctx.groupFolder,
+    timestamp: new Date().toISOString(),
+  });
+
+  return JSON.stringify({
+    ok: true,
+    message: `Workflow ${args.workflow_id} step ${args.step_index} reported as ${args.status}.`,
+  });
+}
+
+async function runCancelWorkflow(
+  argsJson: string,
+  ctx: ExecutorContext,
+): Promise<string> {
+  let args: { workflow_id: string };
+  try {
+    args = JSON.parse(argsJson);
+  } catch {
+    return JSON.stringify({ ok: false, error: 'Invalid JSON' });
+  }
+  if (!args.workflow_id?.trim()) {
+    return JSON.stringify({ ok: false, error: 'workflow_id is required' });
+  }
+
+  writeIpcTask({
+    type: 'cancel_workflow',
+    workflowId: args.workflow_id.trim(),
+    groupFolder: ctx.groupFolder,
+    timestamp: new Date().toISOString(),
+  });
+
+  return JSON.stringify({
+    ok: true,
+    message: `Workflow ${args.workflow_id} cancellation requested.`,
+  });
+}
+
 function toToolCtx(ctx: ExecutorContext): ToolContext {
   return { log: ctx.log, env: ctx.env as Record<string, string | undefined> };
 }
@@ -236,12 +531,20 @@ export async function executeTool(
       return runShell(argsJson, ctx);
     case 'web_fetch':
       return runWebFetch(argsJson, ctx);
+    case 'cloudflare_fetch':
+      return runCloudflareFetch(argsJson, ctx);
     case 'web_search':
       return runWebSearch(argsJson, ctx);
     case 'list_agents':
       return runListAgents(ctx);
     case 'ask_agent':
       return runAskAgent(argsJson, ctx);
+    case 'start_workflow':
+      return runStartWorkflow(argsJson, ctx);
+    case 'report_result':
+      return runReportResult(argsJson, ctx);
+    case 'cancel_workflow':
+      return runCancelWorkflow(argsJson, ctx);
 
     // Agent Browser tools
     case 'browse_open': {

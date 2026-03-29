@@ -1,4 +1,5 @@
 import { ContainerConfig, RegisteredGroup, SubAgentConfig } from '../types.js';
+import { BrowserToolPolicySpec } from '../catalog/toolsets/types.js';
 
 export interface ResolvedDepartmentSpec {
   id: string;
@@ -14,6 +15,7 @@ export interface ResolvedAgentRuntimeSpec extends SubAgentConfig {
   personaPrompt: string | null;
   toolsetIds: string[];
   flowIds: string[];
+  browserPolicy?: BrowserToolPolicySpec;
 }
 
 export interface ResolvedServiceDeployment {
@@ -46,5 +48,7 @@ export interface ResolvedServiceDeployment {
     | 'model'
     | 'apiKey'
     | 'baseUrl'
-  >;
+  > & {
+    browserPolicy?: BrowserToolPolicySpec;
+  };
 }

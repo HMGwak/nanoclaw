@@ -18,7 +18,7 @@ const MAX_OUTPUT = 100_000;
 async function run(
   args: string[],
   ctx: ToolContext,
-): Promise<{ stdout: string; stderr: string; ok: boolean }> {
+): Promise<{ stdout: string; stderr: string; ok: boolean; error?: string }> {
   const env = Object.fromEntries(
     Object.entries(ctx.env).filter((e): e is [string, string] => typeof e[1] === 'string'),
   );
@@ -35,6 +35,7 @@ async function run(
       stdout: e.stdout || '',
       stderr: e.stderr || '',
       ok: false,
+      error: e.message,
     };
   }
 }
@@ -60,7 +61,10 @@ export async function agentBrowseOpen(
   ctx.log(`agent-browser: open ${url}`);
   const res = await run(['open', url], ctx);
   if (!res.ok) {
-    return { ok: false, error: `Failed to open: ${res.stderr}` };
+    return {
+      ok: false,
+      error: `Failed to open: ${res.stderr || res.error || 'unknown error'}`,
+    };
   }
   // Wait for page load
   await run(['wait', '--load', 'networkidle'], ctx);
@@ -76,7 +80,10 @@ export async function agentBrowseClick(
   ctx.log(`agent-browser: click ${ref}`);
   const res = await run(['click', ref], ctx);
   if (!res.ok) {
-    return { ok: false, error: `Click failed: ${res.stderr}` };
+    return {
+      ok: false,
+      error: `Click failed: ${res.stderr || res.error || 'unknown error'}`,
+    };
   }
   const snapshot = await takeSnapshot(ctx);
   return { ok: true, snapshot };
@@ -91,7 +98,10 @@ export async function agentBrowseFill(
   ctx.log(`agent-browser: fill ${ref} "${text.slice(0, 50)}"`);
   const res = await run(['fill', ref, text], ctx);
   if (!res.ok) {
-    return { ok: false, error: `Fill failed: ${res.stderr}` };
+    return {
+      ok: false,
+      error: `Fill failed: ${res.stderr || res.error || 'unknown error'}`,
+    };
   }
   const snapshot = await takeSnapshot(ctx);
   return { ok: true, snapshot };
@@ -106,7 +116,10 @@ export async function agentBrowseSelect(
   ctx.log(`agent-browser: select ${ref} "${option}"`);
   const res = await run(['select', ref, option], ctx);
   if (!res.ok) {
-    return { ok: false, error: `Select failed: ${res.stderr}` };
+    return {
+      ok: false,
+      error: `Select failed: ${res.stderr || res.error || 'unknown error'}`,
+    };
   }
   const snapshot = await takeSnapshot(ctx);
   return { ok: true, snapshot };
@@ -129,7 +142,10 @@ export async function agentBrowseScreenshot(
   const path = '/tmp/ab-screenshot.png';
   const res = await run(['screenshot', path], ctx);
   if (!res.ok) {
-    return { ok: false, error: `Screenshot failed: ${res.stderr}` };
+    return {
+      ok: false,
+      error: `Screenshot failed: ${res.stderr || res.error || 'unknown error'}`,
+    };
   }
   const fs = await import('fs');
   if (fs.existsSync(path)) {
@@ -159,7 +175,10 @@ export async function agentBrowsePress(
   ctx.log(`agent-browser: press ${key}`);
   const res = await run(['press', key], ctx);
   if (!res.ok) {
-    return { ok: false, error: `Press failed: ${res.stderr}` };
+    return {
+      ok: false,
+      error: `Press failed: ${res.stderr || res.error || 'unknown error'}`,
+    };
   }
   const snapshot = await takeSnapshot(ctx);
   return { ok: true, snapshot };
@@ -171,5 +190,8 @@ export async function agentBrowseClose(
 ): Promise<BrowseResult> {
   ctx.log('agent-browser: close');
   const res = await run(['close', '--all'], ctx);
-  return { ok: res.ok, error: res.ok ? undefined : res.stderr };
+  return {
+    ok: res.ok,
+    error: res.ok ? undefined : res.stderr || res.error || 'unknown error',
+  };
 }

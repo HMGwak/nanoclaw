@@ -60,7 +60,7 @@ function buildSystemPrompt(context: AgentTurnContext): string {
   return buildAgentPrompt({
     containerInput: context.containerInput,
     defaultPrompt:
-      'You are an AI assistant. Use shell for local commands, web_fetch for known URLs, web_search for current information, agent-browser for most interactive browsing, and Playwright only as a heavier fallback.',
+      'You are an AI assistant. Use shell for local commands, and for URL retrieval use cloudflare_fetch first when available, then agent-browser for interactive browsing, and Playwright only as a heavier fallback.',
   });
 }
 
@@ -118,7 +118,13 @@ async function runOpenAICompatTurn(
       model,
       messages,
       tools,
-      loopContext: { log: context.log, env: context.agentEnv },
+      loopContext: {
+        log: context.log,
+        env: context.agentEnv,
+        chatJid: context.containerInput.chatJid,
+        groupFolder: context.containerInput.groupFolder,
+        isMain: context.containerInput.isMain,
+      },
       maxLoops: MAX_TOOL_LOOPS,
     });
 

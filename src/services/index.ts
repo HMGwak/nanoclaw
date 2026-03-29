@@ -1,6 +1,7 @@
 import { getAgentSpec } from '../catalog/agents/index.js';
 import { getSdkProfileSpec } from '../catalog/sdk-profiles/index.js';
 import { getToolsetSpec } from '../catalog/toolsets/index.js';
+import { BrowserToolPolicySpec } from '../catalog/toolsets/types.js';
 import { RegisteredGroup } from '../types.js';
 import { getDiscordDepartmentSpec } from './discord/departments/index.js';
 import { getDiscordDeploymentForGroup } from './discord/deployments.js';
@@ -18,6 +19,26 @@ function unique(values: string[]): string[] {
   );
 }
 
+const POLICY_AGENT_BROWSER_TOOLS = [
+  'browse_open',
+  'browse_click',
+  'browse_fill',
+  'browse_select',
+  'browse_snapshot',
+  'browse_screenshot',
+  'browse_get_text',
+  'browse_press',
+  'browse_close',
+];
+
+const POLICY_PLAYWRIGHT_TOOLS = [
+  'playwright_open',
+  'playwright_screenshot',
+  'playwright_execute',
+  'playwright_extract',
+  'playwright_pdf',
+];
+
 function mergeAllowedToolsFromSets(
   allowedToolSets: Array<string[] | null | undefined>,
 ): string[] | undefined {
@@ -25,6 +46,39 @@ function mergeAllowedToolsFromSets(
   if (hasUnrestricted) return undefined;
   const merged = unique(allowedToolSets.flatMap((entry) => entry || []));
   return merged.length > 0 ? merged : undefined;
+}
+
+function mergeBrowserPolicyFromSets(
+  policies: Array<BrowserToolPolicySpec | undefined>,
+): BrowserToolPolicySpec | undefined {
+  const candidates = policies.filter(
+    (policy): policy is BrowserToolPolicySpec => Boolean(policy),
+  );
+  if (candidates.length === 0) return undefined;
+  return (
+    candidates.find((policy) => policy.enforcement === 'hard') || candidates[0]
+  );
+}
+
+function resolvePolicyRequiredTools(
+  policy: BrowserToolPolicySpec | undefined,
+): string[] {
+  if (!policy) return [];
+  const required: string[] = [];
+  for (const stage of policy.chain) {
+    if (stage === 'cloudflare_fetch') {
+      required.push('cloudflare_fetch');
+      continue;
+    }
+    if (stage === 'agent_browser') {
+      required.push(...POLICY_AGENT_BROWSER_TOOLS);
+      continue;
+    }
+    if (stage === 'playwright') {
+      required.push(...POLICY_PLAYWRIGHT_TOOLS);
+    }
+  }
+  return unique([...(policy.supplementalTools || []), ...required]);
 }
 
 function resolveAgentRuntime(
@@ -61,6 +115,10 @@ function resolveAgentRuntime(
     ...globalToolsets.map((toolset) => toolset.allowedTools),
     ...localToolsets.map((toolset) => toolset.allowedTools),
   ]);
+  const browserPolicy = mergeBrowserPolicyFromSets([
+    ...globalToolsets.map((toolset) => toolset.browserPolicy),
+    ...localToolsets.map((toolset) => toolset.browserPolicy),
+  ]);
 
   const flowIds = unique([...agent.defaultFlowIds, ...personnel.flowIds]);
 
@@ -77,6 +135,7 @@ function resolveAgentRuntime(
     allowedTools,
     toolsetIds: [...globalToolsetIds, ...personnel.localToolsetIds],
     flowIds,
+    browserPolicy,
   };
 }
 
@@ -113,6 +172,13 @@ export function resolveServiceDeployment(
     senderBotMap[lead.displayName] = discordDeployment.botLabel;
   }
 
+  const baseAllowedTools =
+    group.containerConfig?.allowedTools || lead?.allowedTools;
+  const policyRequiredTools = resolvePolicyRequiredTools(lead?.browserPolicy);
+  const runtimeAllowedTools = baseAllowedTools
+    ? unique([...baseAllowedTools, ...policyRequiredTools])
+    : undefined;
+
   return {
     id: discordDeployment.id,
     service: 'discord',
@@ -143,10 +209,11 @@ export function resolveServiceDeployment(
       additionalMounts: group.containerConfig?.additionalMounts,
       timeout: group.containerConfig?.timeout,
       backend: group.containerConfig?.backend,
-      allowedTools: group.containerConfig?.allowedTools || lead?.allowedTools,
+      allowedTools: runtimeAllowedTools,
       model: group.containerConfig?.model,
       apiKey: group.containerConfig?.apiKey,
       baseUrl: group.containerConfig?.baseUrl,
+      browserPolicy: lead?.browserPolicy,
     },
   };
 }

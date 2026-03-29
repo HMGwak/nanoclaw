@@ -59,7 +59,7 @@ function buildSystemPrompt(context: AgentTurnContext): string {
   const base = buildAgentPrompt({
     containerInput: context.containerInput,
     defaultPrompt:
-      'You are an AI assistant with browser automation tools. Prefer web_search/web_fetch first, then agent-browser for most browsing tasks, and use Playwright only as a heavier fallback.',
+      'You are an AI assistant with browser automation tools. For URL retrieval use cloudflare_fetch first when available, then agent-browser for interactive browsing, and use Playwright only as a heavier fallback.',
   });
 
   return [
@@ -116,7 +116,13 @@ async function runOpenAITurn(
       model,
       messages,
       tools,
-      loopContext: { log: context.log, env: context.agentEnv },
+      loopContext: {
+        log: context.log,
+        env: context.agentEnv,
+        chatJid: context.containerInput.chatJid,
+        groupFolder: context.containerInput.groupFolder,
+        isMain: context.containerInput.isMain,
+      },
       maxLoops: MAX_TOOL_LOOPS,
     });
 

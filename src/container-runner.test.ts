@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
+import { spawn } from 'child_process';
 
 // Sentinel markers must match container-runner.ts
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -313,6 +314,41 @@ describe('container instruction layers', () => {
       'Teammate:',
     );
     expect(containerInput.subAgents).toBeUndefined();
+
+    emitOutputMarker(fakeProc, { status: 'success', result: 'ok' });
+    fakeProc.emit('close', 0);
+    await resultPromise;
+  });
+
+  it('passes browser policy env from service deployment into container args', async () => {
+    fakeProc = createFakeProcess();
+    const spawnMock = vi.mocked(spawn);
+
+    const resultPromise = runContainerAgent(
+      {
+        ...testGroup,
+        folder: 'discord_workshop',
+        name: '작업실',
+      },
+      {
+        ...testInput,
+        groupFolder: 'discord_workshop',
+      },
+      () => {},
+      async () => {},
+    );
+
+    await new Promise<void>((resolve) => fakeProc.stdin.on('finish', resolve));
+
+    const lastSpawnCall = spawnMock.mock.calls.at(-1);
+    expect(lastSpawnCall).toBeDefined();
+    const args = (lastSpawnCall?.[1] || []) as string[];
+    const policyArg = args.find((arg) =>
+      arg.startsWith('NANOCLAW_BROWSER_POLICY='),
+    );
+    expect(policyArg).toBeDefined();
+    expect(policyArg).toContain('"enforcement":"hard"');
+    expect(policyArg).toContain('"chain":["cloudflare_fetch","agent_browser","playwright"]');
 
     emitOutputMarker(fakeProc, { status: 'success', result: 'ok' });
     fakeProc.emit('close', 0);

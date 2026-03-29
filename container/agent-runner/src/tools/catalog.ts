@@ -25,7 +25,7 @@ export const allTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: 'web_search',
       description:
-        'Search the web using DuckDuckGo and return results. Use this first for lightweight current-info lookups before escalating to browser tools.',
+        'Search the web using DuckDuckGo and return results. Use for query-based lookup when you do not have a direct URL.',
       parameters: {
         type: 'object',
         properties: {
@@ -41,11 +41,27 @@ export const allTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: 'web_fetch',
       description:
-        'Fetch a URL and return the response body as text. Use this before browser tools when you already know the URL and the page is fetchable as plain HTML.',
+        'Fetch a URL and return the response body as text. Prefer cloudflare_fetch first when configured; use this for simple pages and lightweight fallback.',
       parameters: {
         type: 'object',
         properties: {
           url: { type: 'string', description: 'The full URL to fetch.' },
+        },
+        required: ['url'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'cloudflare_fetch',
+      description:
+        'Fetch a URL through Cloudflare Browser Rendering content endpoint and return rendered page content. Prefer this first when Browser Rendering credentials are configured.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The full URL to render and fetch.' },
         },
         required: ['url'],
         additionalProperties: false,
@@ -313,6 +329,90 @@ export const allTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
         },
         required: ['agent', 'prompt'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'start_workflow',
+      description:
+        'Start a workflow from planning. Use after user explicitly approves workflow execution.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Workflow title.' },
+          flow_id: {
+            type: 'string',
+            description:
+              'Optional flow id. Defaults to planning-workshop. Use experiment-loop for experiment workflows.',
+          },
+          steps: {
+            type: 'array',
+            description: 'Ordered workflow steps.',
+            items: {
+              type: 'object',
+              properties: {
+                assignee: {
+                  type: 'string',
+                  description: 'Assignee group alias or role.',
+                },
+                goal: { type: 'string', description: 'Step goal.' },
+                acceptance_criteria: {
+                  type: ['string', 'array'],
+                  items: { type: 'string' },
+                  description: 'Success conditions for this step.',
+                },
+                constraints: {
+                  type: ['string', 'array'],
+                  items: { type: 'string' },
+                  description: 'Constraints for this step.',
+                },
+                stage_id: {
+                  type: 'string',
+                  description: 'Optional stage id for stage-aware workflows.',
+                },
+              },
+              required: ['assignee', 'goal'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['title', 'steps'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'report_result',
+      description: 'Report completion/failure for an assigned workflow step.',
+      parameters: {
+        type: 'object',
+        properties: {
+          workflow_id: { type: 'string' },
+          step_index: { type: 'number' },
+          status: { type: 'string', enum: ['completed', 'failed'] },
+          result_summary: { type: 'string' },
+        },
+        required: ['workflow_id', 'step_index', 'status', 'result_summary'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'cancel_workflow',
+      description: 'Cancel an in-progress workflow.',
+      parameters: {
+        type: 'object',
+        properties: {
+          workflow_id: { type: 'string' },
+        },
+        required: ['workflow_id'],
         additionalProperties: false,
       },
     },

@@ -116,7 +116,7 @@ export function buildSharedSkillsInfo(): string | null {
       '',
       'These skills are shared across providers. Use them as behavioral guidance even when your backend does not have a native Skill tool.',
       'When web research is needed, prefer the shared `agent-browser` skill guidance over guessing.',
-      'Preferred browsing order: `web_search`/`web_fetch` for simple retrieval, then `agent-browser` for most interactive browsing, and only then Playwright for heavier fallback cases.',
+      'Preferred browsing order: `cloudflare_fetch` first (if configured), then `agent-browser` for interactive browsing, and only then Playwright for heavier fallback cases.',
       '',
       ...lines,
     ].join('\n');
