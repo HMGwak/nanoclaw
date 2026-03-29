@@ -60,6 +60,16 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import {
+  resolveGroupTargetSender,
+  shouldEnforceSingleSender,
+} from './services/index.js';
+import {
+  buildDiscordSharedContextBlock,
+  getDiscordGroupBindingForBotLabel,
+  getDiscordGroupBindingForGroup,
+  recordDiscordSharedVisibleReply,
+} from './services/discord/index.js';
 import { normalizeAgentOutputs } from './agent-output.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
@@ -104,6 +114,88 @@ function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
   );
 }
 
+function parseDiscordBotLabelFromJid(jid: string): string | null {
+  if (!jid.startsWith('dc:')) return null;
+  const parts = jid.replace(/^dc:/, '').split(':');
+  if (parts.length < 2) return 'primary';
+  const label = parts[1]?.trim().toLowerCase();
+  return label || null;
+}
+
+function migrateDiscordGroupRegistrations(): void {
+  const existingEntries = Object.entries(registeredGroups);
+  let normalizedCount = 0;
+  let createdCount = 0;
+
+  for (const [jid, group] of existingEntries) {
+    const bindingByFolder = getDiscordGroupBindingForGroup(group.folder);
+    if (!bindingByFolder) continue;
+    const botLabel = parseDiscordBotLabelFromJid(jid);
+    const bindingByLabel = botLabel
+      ? getDiscordGroupBindingForBotLabel(botLabel)
+      : null;
+    const binding =
+      bindingByLabel && bindingByLabel.departmentId === bindingByFolder.departmentId
+        ? bindingByLabel
+        : bindingByFolder;
+
+    const canonicalFolder = binding.canonicalGroupFolder;
+    const requiresTrigger =
+      binding.requiresTrigger === undefined
+        ? group.requiresTrigger
+        : binding.requiresTrigger;
+    const needsUpdate =
+      canonicalFolder !== group.folder ||
+      requiresTrigger !== group.requiresTrigger;
+
+    if (!needsUpdate) continue;
+
+    const normalized: RegisteredGroup = {
+      ...group,
+      folder: canonicalFolder,
+      requiresTrigger,
+    };
+    registerGroup(jid, normalized);
+    normalizedCount += 1;
+
+    const previousSession = sessions[group.folder];
+    if (previousSession && !sessions[canonicalFolder]) {
+      sessions[canonicalFolder] = previousSession;
+      setSession(canonicalFolder, previousSession);
+    }
+  }
+
+  const kimiBinding = getDiscordGroupBindingForBotLabel('kimi');
+  if (kimiBinding) {
+    for (const [jid, group] of Object.entries(registeredGroups)) {
+      if (parseDiscordBotLabelFromJid(jid) !== 'workshop') continue;
+      const channelId = jid.replace(/^dc:/, '').split(':')[0];
+      const kimiJid = `dc:${channelId}:kimi`;
+      if (registeredGroups[kimiJid]) continue;
+
+      registerGroup(kimiJid, {
+        name: `${group.name}-키미`,
+        folder: kimiBinding.canonicalGroupFolder,
+        trigger: '@키미',
+        added_at: new Date().toISOString(),
+        containerConfig: group.containerConfig,
+        requiresTrigger:
+          kimiBinding.requiresTrigger === undefined
+            ? group.requiresTrigger
+            : kimiBinding.requiresTrigger,
+      });
+      createdCount += 1;
+    }
+  }
+
+  if (normalizedCount > 0 || createdCount > 0) {
+    logger.info(
+      { normalizedCount, createdCount },
+      'Discord group registrations migrated to canonical bot folders',
+    );
+  }
+}
+
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
   const agentTs = getRouterState('last_agent_timestamp');
@@ -143,6 +235,7 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
 
   // Create group folder
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
+  fs.mkdirSync(path.join(groupDir, 'runs'), { recursive: true });
 
   // Copy AGENTS.md template into the new group folder so agents have
   // identity and instructions from the first run.  (Fixes #1391)
@@ -234,7 +327,14 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
-  const prompt = formatMessages(missedMessages, TIMEZONE);
+  const promptBase = formatMessages(missedMessages, TIMEZONE);
+  const sharedContextBlock = buildDiscordSharedContextBlock(group, chatJid, {
+    beforeTimestamp: missedMessages[0]?.timestamp,
+    limit: 30,
+  });
+  const prompt = sharedContextBlock
+    ? `${sharedContextBlock}\n\n${promptBase}`
+    : promptBase;
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -274,11 +374,20 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           ? result.result
           : JSON.stringify(result.result);
       logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
-      const outputs = normalizeAgentOutputs(raw, group);
+      const targetSender = resolveGroupTargetSender(group, chatJid);
+      const outputs = normalizeAgentOutputs(raw, group, targetSender, {
+        enforceSingleSender: shouldEnforceSingleSender(group),
+      });
       for (const output of outputs) {
         await channel.sendMessage(chatJid, output.text, {
           sender: output.sender,
         });
+        recordDiscordSharedVisibleReply(
+          group,
+          chatJid,
+          output.sender,
+          output.text,
+        );
       }
       if (outputs.length > 0) {
         outputSentToUser = true;
@@ -533,6 +642,7 @@ async function main(): Promise<void> {
   initDatabase();
   logger.info('Database initialized');
   loadState();
+  migrateDiscordGroupRegistrations();
 
   // Ensure OneCLI agents exist for all registered groups.
   // Recovers from missed creates (e.g. OneCLI was down at registration time).
@@ -676,7 +786,12 @@ async function main(): Promise<void> {
     sendMessage: (jid, text, opts) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      return channel.sendMessage(jid, text, opts);
+      return channel.sendMessage(jid, text, opts).then(() => {
+        const group = registeredGroups[jid];
+        if (group && opts?.sender) {
+          recordDiscordSharedVisibleReply(group, jid, opts.sender, text);
+        }
+      });
     },
     registeredGroups: () => registeredGroups,
     registerGroup,

@@ -38,6 +38,18 @@ function createSchema(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp);
 
+    CREATE TABLE IF NOT EXISTS shared_context_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      service TEXT NOT NULL,
+      department_id TEXT NOT NULL,
+      channel_key TEXT NOT NULL,
+      sender_name TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_shared_context_scope_time
+      ON shared_context_messages(service, department_id, channel_key, created_at DESC, id DESC);
+
     CREATE TABLE IF NOT EXISTS scheduled_tasks (
       id TEXT PRIMARY KEY,
       group_folder TEXT NOT NULL,
@@ -420,6 +432,101 @@ export function getMessagesSince(
   return db
     .prepare(sql)
     .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
+}
+
+export interface SharedContextMessage {
+  id: number;
+  service: string;
+  department_id: string;
+  channel_key: string;
+  sender_name: string;
+  content: string;
+  created_at: string;
+}
+
+export function appendSharedContextMessage(input: {
+  service: string;
+  departmentId: string;
+  channelKey: string;
+  senderName: string;
+  content: string;
+  createdAt?: string;
+  retentionLimit?: number;
+}): void {
+  const createdAt = input.createdAt || new Date().toISOString();
+  const retentionLimit =
+    input.retentionLimit && input.retentionLimit > 0 ? input.retentionLimit : 30;
+
+  db.prepare(
+    `INSERT INTO shared_context_messages (service, department_id, channel_key, sender_name, content, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    input.service,
+    input.departmentId,
+    input.channelKey,
+    input.senderName,
+    input.content,
+    createdAt,
+  );
+
+  db.prepare(
+    `DELETE FROM shared_context_messages
+     WHERE service = ?
+       AND department_id = ?
+       AND channel_key = ?
+       AND id NOT IN (
+         SELECT id
+         FROM shared_context_messages
+         WHERE service = ?
+           AND department_id = ?
+           AND channel_key = ?
+         ORDER BY created_at DESC, id DESC
+         LIMIT ?
+       )`,
+  ).run(
+    input.service,
+    input.departmentId,
+    input.channelKey,
+    input.service,
+    input.departmentId,
+    input.channelKey,
+    retentionLimit,
+  );
+}
+
+export function listSharedContextMessages(input: {
+  service: string;
+  departmentId: string;
+  channelKey: string;
+  beforeTimestamp?: string;
+  limit?: number;
+}): SharedContextMessage[] {
+  const limit = input.limit && input.limit > 0 ? input.limit : 30;
+  const args: Array<string | number> = [
+    input.service,
+    input.departmentId,
+    input.channelKey,
+  ];
+  const whereBefore = input.beforeTimestamp ? 'AND created_at < ?' : '';
+  if (input.beforeTimestamp) {
+    args.push(input.beforeTimestamp);
+  }
+  args.push(limit);
+
+  const rows = db
+    .prepare(
+      `SELECT id, service, department_id, channel_key, sender_name, content, created_at
+       FROM shared_context_messages
+       WHERE service = ?
+         AND department_id = ?
+         AND channel_key = ?
+         ${whereBefore}
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+    )
+    .all(...args) as SharedContextMessage[];
+
+  return rows.reverse();
 }
 
 export function createTask(

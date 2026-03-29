@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 
 import {
   _initTestDatabase,
+  appendSharedContextMessage,
   createTask,
   deleteTask,
   getAllChats,
@@ -9,6 +10,7 @@ import {
   getMessagesSince,
   getNewMessages,
   getTaskById,
+  listSharedContextMessages,
   setRegisteredGroup,
   storeChatMetadata,
   storeMessage,
@@ -295,6 +297,104 @@ describe('getNewMessages', () => {
     const { messages, newTimestamp } = getNewMessages([], '', 'Andy');
     expect(messages).toHaveLength(0);
     expect(newTimestamp).toBe('');
+  });
+});
+
+describe('shared context messages', () => {
+  it('stores and retrieves scoped shared context in chronological order', () => {
+    appendSharedContextMessage({
+      service: 'discord',
+      departmentId: 'workshop',
+      channelKey: 'dc:111',
+      senderName: '작업실 팀장',
+      content: '첫 메시지',
+      createdAt: '2026-03-29T01:00:00.000Z',
+    });
+    appendSharedContextMessage({
+      service: 'discord',
+      departmentId: 'workshop',
+      channelKey: 'dc:111',
+      senderName: '키미',
+      content: '두 번째 메시지',
+      createdAt: '2026-03-29T01:01:00.000Z',
+    });
+    appendSharedContextMessage({
+      service: 'discord',
+      departmentId: 'planning',
+      channelKey: 'dc:111',
+      senderName: '기획실',
+      content: '다른 부서',
+      createdAt: '2026-03-29T01:02:00.000Z',
+    });
+
+    const rows = listSharedContextMessages({
+      service: 'discord',
+      departmentId: 'workshop',
+      channelKey: 'dc:111',
+      limit: 30,
+    });
+
+    expect(rows.map((row) => row.content)).toEqual([
+      '첫 메시지',
+      '두 번째 메시지',
+    ]);
+  });
+
+  it('applies beforeTimestamp cutoff', () => {
+    appendSharedContextMessage({
+      service: 'discord',
+      departmentId: 'workshop',
+      channelKey: 'dc:111',
+      senderName: '작업실 팀장',
+      content: '이전 메시지',
+      createdAt: '2026-03-29T01:00:00.000Z',
+    });
+    appendSharedContextMessage({
+      service: 'discord',
+      departmentId: 'workshop',
+      channelKey: 'dc:111',
+      senderName: '키미',
+      content: '최신 메시지',
+      createdAt: '2026-03-29T01:10:00.000Z',
+    });
+
+    const rows = listSharedContextMessages({
+      service: 'discord',
+      departmentId: 'workshop',
+      channelKey: 'dc:111',
+      beforeTimestamp: '2026-03-29T01:05:00.000Z',
+      limit: 30,
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].content).toBe('이전 메시지');
+  });
+
+  it('enforces retention per scope', () => {
+    for (let i = 0; i < 5; i++) {
+      appendSharedContextMessage({
+        service: 'discord',
+        departmentId: 'workshop',
+        channelKey: 'dc:111',
+        senderName: '작업실 팀장',
+        content: `message ${i}`,
+        createdAt: `2026-03-29T01:0${i}:00.000Z`,
+        retentionLimit: 3,
+      });
+    }
+
+    const rows = listSharedContextMessages({
+      service: 'discord',
+      departmentId: 'workshop',
+      channelKey: 'dc:111',
+      limit: 30,
+    });
+
+    expect(rows.map((row) => row.content)).toEqual([
+      'message 2',
+      'message 3',
+      'message 4',
+    ]);
   });
 });
 
