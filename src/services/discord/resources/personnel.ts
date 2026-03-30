@@ -15,7 +15,7 @@ const DISCORD_PERSONNEL: Record<string, DiscordPersonnelSpec> = {
     catalogAgentId: 'openai_gpt54_planner',
     promptId: 'discord_workshop_teamlead',
     localToolsetIds: ['discord_workshop_lead_local'],
-    flowIds: ['planning-workshop'],
+    flowIds: ['karpathy-loop'],
     role: 'Workshop team lead',
   },
   discord_workshop_kimi: {
@@ -24,7 +24,7 @@ const DISCORD_PERSONNEL: Record<string, DiscordPersonnelSpec> = {
     catalogAgentId: 'opencode_kimi_k25_researcher',
     promptId: 'discord_workshop_kimi',
     localToolsetIds: ['discord_workshop_research_local'],
-    flowIds: ['planning-workshop'],
+    flowIds: ['karpathy-loop'],
     role: 'Workshop implementation and research teammate',
   },
   discord_planning_lead: {
@@ -33,7 +33,7 @@ const DISCORD_PERSONNEL: Record<string, DiscordPersonnelSpec> = {
     catalogAgentId: 'openai_gpt54_planner',
     promptId: 'discord_planning_lead',
     localToolsetIds: ['discord_planning_lead_local'],
-    flowIds: ['planning-workshop'],
+    flowIds: ['karpathy-loop'],
     role: 'Planning lead',
   },
   discord_secretary_lead: {

@@ -35,7 +35,8 @@ describe('debate mode registry', () => {
 
     const standardProtocol = getDebateProtocolSpec('standard');
     expect(standardProtocol?.consensusPolicy).toBe('lead_final_judgment');
-    expect(standardProtocol?.sourceModuleIds).toContain('autoresearch');
+    expect(standardProtocol?.postRoundCollection.triggerAfterRound).toBe(1);
+    expect(standardProtocol?.sourceModuleIds).toContain('karpathy_loop');
 
     const standardMode = getDebateModeSpec('standard');
     expect(standardMode?.protocolId).toBe('standard');
@@ -66,6 +67,7 @@ describe('debate mode registry', () => {
     expect(contracts.input.modeHint).toBe('tradeoff');
     expect(Array.isArray(contracts.input.evidencePacks)).toBe(true);
     expect(Array.isArray(contracts.output.roundSummaries)).toBe(true);
+    expect(contracts.output.postRoundCollectionSummary).toBeNull();
 
     const overlay = buildDebateServiceOverlay(
       ['discord_workshop_teamlead', 'discord_workshop_kimi'],

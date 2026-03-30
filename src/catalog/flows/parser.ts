@@ -1,6 +1,13 @@
 import { WorkflowPlanStep } from '../../types.js';
 import { getFlowSpec } from './registry.js';
-import { parsePlanningWorkshopSteps } from './planning-workshop.js';
+
+const FLOW_ID_ALIASES: Record<string, string> = {
+  'karpathy-loop': 'karpathy-loop',
+  karpathy_loop: 'karpathy-loop',
+  'experiment-loop': 'karpathy-loop',
+  experiment_loop: 'karpathy-loop',
+  'planning-workshop': 'karpathy-loop',
+};
 
 function toStringList(value: unknown): string[] | undefined {
   if (Array.isArray(value)) {
@@ -20,12 +27,10 @@ export function parseFlowSteps(
   flowId: string | undefined,
   steps: unknown[],
 ): WorkflowPlanStep[] {
-  if (flowId === 'planning-workshop') {
-    return parsePlanningWorkshopSteps(steps);
-  }
+  const canonicalFlowId = normalizeFlowId(flowId);
 
-  const stageDefaults = flowId
-    ? (getFlowSpec(flowId)?.stages || []).map((stage) => stage.id)
+  const stageDefaults = canonicalFlowId
+    ? (getFlowSpec(canonicalFlowId)?.stages || []).map((stage) => stage.id)
     : [];
 
   return (
@@ -55,4 +60,13 @@ export function parseFlowSteps(
           ? step.stage_id.trim()
           : stageDefaults[index],
     }));
+}
+
+export function normalizeFlowId(
+  flowId: string | undefined,
+): string | undefined {
+  if (typeof flowId !== 'string') return undefined;
+  const normalized = flowId.trim();
+  if (!normalized) return undefined;
+  return FLOW_ID_ALIASES[normalized.toLowerCase()] || normalized;
 }

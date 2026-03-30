@@ -9,7 +9,7 @@ This document preserves service-neutral debate I/O contract expectations.
 - `rounds_hint`: optional desired round count
 - `participants_hint`: optional participant/role hints
 - `background_knowledge_refs`: optional context handles
-- `evidence_packs`: typed evidence entries (`web`, `file`, `memory`, `autoresearch_brief`)
+- `evidence_packs`: typed evidence entries (`web`, `file`, `memory`, `karpathy_loop_brief`)
 
 ## Output Contract (Canonical Fields)
 

@@ -7,6 +7,7 @@ export type {
   DebateModeId,
   DebateModeSpec,
   DebateOutputContract,
+  DebatePostRoundCollectionSpec,
   DebateProtocolSpec,
   DebateRoleSpec,
   DebateServiceOverlayContract,

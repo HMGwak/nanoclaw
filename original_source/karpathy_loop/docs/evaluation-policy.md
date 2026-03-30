@@ -1,4 +1,4 @@
-# autoresearch evaluation policy (normalized)
+# karpathy loop evaluation policy (normalized)
 
 This document captures evaluation and decision policy patterns in a reusable way.
 

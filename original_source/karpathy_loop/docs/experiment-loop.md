@@ -1,4 +1,4 @@
-# autoresearch experiment loop (normalized)
+# karpathy loop (normalized)
 
 This document captures the reusable, service-neutral loop from the upstream
 `program.md`.

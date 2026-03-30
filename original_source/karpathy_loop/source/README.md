@@ -1,4 +1,4 @@
-# autoresearch source notes
+# karpathy loop source notes
 
 This directory stores a commit-pinned upstream snapshot.
 

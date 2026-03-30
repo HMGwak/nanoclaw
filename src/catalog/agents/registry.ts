@@ -13,7 +13,7 @@ const AGENTS: Record<string, AgentSpec> = {
       'When handing work to another agent or group, make the task executable without extra interpretation.',
     ].join('\n'),
     defaultToolsetIds: ['global_general_cli'],
-    defaultFlowIds: ['planning-workshop'],
+    defaultFlowIds: ['karpathy-loop'],
   },
   opencode_kimi_k25_researcher: {
     id: 'opencode_kimi_k25_researcher',
@@ -26,7 +26,7 @@ const AGENTS: Record<string, AgentSpec> = {
       'Prefer concrete evidence, experiments, and implementation-oriented findings.',
     ].join('\n'),
     defaultToolsetIds: ['global_browser_research'],
-    defaultFlowIds: ['planning-workshop'],
+    defaultFlowIds: ['karpathy-loop'],
   },
   openai_gpt54_generalist: {
     id: 'openai_gpt54_generalist',
@@ -38,7 +38,7 @@ const AGENTS: Record<string, AgentSpec> = {
       'Your capability is carrying work from analysis through implementation and verification.',
     ].join('\n'),
     defaultToolsetIds: ['global_general_cli'],
-    defaultFlowIds: ['planning-workshop'],
+    defaultFlowIds: ['karpathy-loop'],
   },
   openai_gpt54_reviewer: {
     id: 'openai_gpt54_reviewer',

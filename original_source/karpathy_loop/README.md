@@ -1,4 +1,4 @@
-# autoresearch
+# karpathy_loop
 
 This module preserves the upstream source of Andrej Karpathy's
 `karpathy/autoresearch` project as a commit-pinned snapshot.

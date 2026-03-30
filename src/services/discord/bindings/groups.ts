@@ -23,6 +23,19 @@ export interface DiscordGroupBindingSpec {
 
 const DISCORD_GROUP_BINDINGS: DiscordGroupBindingSpec[] =
   listDiscordBotResources().map((resource) => ({
+    teammatePersonnelIds:
+      resource.id === 'discord-workshop-teamlead'
+        ? ['discord_workshop_kimi']
+        : resource.id === 'discord-workshop-kimi'
+          ? ['discord_workshop_teamlead']
+          : [],
+    senderBotMap:
+      resource.departmentId === 'workshop'
+        ? {
+            '작업실 팀장': 'workshop',
+            키미: 'kimi',
+          }
+        : undefined,
     id: resource.id,
     departmentId: resource.departmentId,
     canonicalGroupFolder: resource.canonicalGroupFolder,
@@ -32,9 +45,7 @@ const DISCORD_GROUP_BINDINGS: DiscordGroupBindingSpec[] =
     ],
     botLabel: resource.botLabel,
     leadPersonnelId: resource.leadPersonnelId,
-    teammatePersonnelIds: [],
     flowIds: [...resource.flowIds],
-    senderBotMap: undefined,
     personaMode: resource.personaMode,
     responsePolicy: resource.responsePolicy,
     requiresTrigger: resource.requiresTrigger,

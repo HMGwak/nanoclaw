@@ -132,8 +132,7 @@ export function normalizeAgentOutputs(
     if (visibleBlocks.length > 0) {
       const ownBlocks = visibleBlocks.filter(
         (block) =>
-          (block.sender || getLeadSenderName(group)).trim() ===
-          explicitSender.trim(),
+          !block.sender || block.sender.trim() === explicitSender.trim(),
       );
       if (ownBlocks.length > 0) {
         return ownBlocks
@@ -141,14 +140,7 @@ export function normalizeAgentOutputs(
           .filter((text) => text.length > 0)
           .map((text) => ({ text, sender: explicitSender }));
       }
-
-      const fallbackVisible = stripAllSpeakerPrefixes(
-        visibleBlocks[0].text,
-        group,
-      );
-      return fallbackVisible
-        ? [{ text: fallbackVisible, sender: explicitSender }]
-        : [];
+      return [];
     }
 
     const transcript = extractSpeakerTranscript(
@@ -166,14 +158,7 @@ export function normalizeAgentOutputs(
           sender: explicitSender,
         }));
       }
-
-      const fallbackSegment = stripAllSpeakerPrefixes(
-        transcript[0].text,
-        group,
-      );
-      return fallbackSegment
-        ? [{ text: fallbackSegment, sender: explicitSender }]
-        : [];
+      return [];
     }
 
     const stripped = stripAllSpeakerPrefixes(

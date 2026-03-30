@@ -3,6 +3,7 @@ import {
   Events,
   GatewayIntentBits,
   Message,
+  PermissionFlagsBits,
   TextChannel,
 } from 'discord.js';
 
@@ -82,6 +83,66 @@ export class DiscordChannel implements Channel {
   private getPersonaMode(jid: string): 'hybrid' | 'bot_only' {
     const group = this.opts.registeredGroups()[jid];
     return resolveDiscordPersonaMode(group);
+  }
+
+  private getChannelIdFromJid(jid: string): string {
+    return jid.replace(/^dc:/, '').split(':')[0] || '';
+  }
+
+  private async runSendPermissionHealthcheck(): Promise<void> {
+    const checked = new Set<string>();
+    const groups = this.opts.registeredGroups();
+
+    for (const jid of Object.keys(groups)) {
+      if (!jid.startsWith('dc:')) continue;
+      const channelId = this.getChannelIdFromJid(jid);
+      if (!channelId) continue;
+
+      const bot = this.getBotForJid(jid);
+      if (!bot?.client || !bot.client.isReady() || !bot.client.user) continue;
+
+      const key = `${bot.label}:${channelId}`;
+      if (checked.has(key)) continue;
+      checked.add(key);
+
+      try {
+        const channel = await bot.client.channels.fetch(channelId);
+        if (!channel || !('permissionsFor' in channel)) continue;
+
+        const permissions = (channel as TextChannel).permissionsFor(
+          bot.client.user.id,
+        );
+        if (!permissions) {
+          logger.warn(
+            { bot: bot.label, channelId, jid },
+            'Discord permission healthcheck could not resolve permission set',
+          );
+          continue;
+        }
+
+        const canView = permissions.has(PermissionFlagsBits.ViewChannel);
+        const canSend = permissions.has(PermissionFlagsBits.SendMessages);
+        if (!canView || !canSend) {
+          logger.error(
+            {
+              bot: bot.label,
+              channelId,
+              jid,
+              missingPermissions: [
+                ...(!canView ? ['ViewChannel'] : []),
+                ...(!canSend ? ['SendMessages'] : []),
+              ],
+            },
+            'Discord permission healthcheck failed',
+          );
+        }
+      } catch (err) {
+        logger.warn(
+          { bot: bot.label, channelId, jid, err },
+          'Discord permission healthcheck could not fetch channel',
+        );
+      }
+    }
   }
 
   private setupMessageHandler(bot: BotClient, isPrimary: boolean): void {
@@ -379,6 +440,8 @@ export class DiscordChannel implements Channel {
         );
       }
     }
+
+    await this.runSendPermissionHealthcheck();
   }
 
   private async getOrCreateWebhook(
@@ -427,10 +490,10 @@ export class DiscordChannel implements Channel {
       logger.warn({ jid }, 'No Discord bot found for JID');
       return;
     }
+    const channelId = this.getChannelIdFromJid(jid);
 
     try {
       // Extract channel ID from JID (dc:channelId or dc:channelId:botLabel)
-      const channelId = jid.replace(/^dc:/, '').split(':')[0];
       const channel = await bot.client.channels.fetch(channelId);
 
       if (!channel || !('send' in channel)) {
@@ -482,7 +545,25 @@ export class DiscordChannel implements Channel {
         'Discord message sent',
       );
     } catch (err) {
-      logger.error({ jid, err }, 'Failed to send Discord message');
+      const errorCode =
+        typeof err === 'object' && err && 'code' in err
+          ? (err as { code?: string | number }).code
+          : undefined;
+      if (errorCode === 50013 || errorCode === '50013') {
+        logger.error(
+          {
+            jid,
+            channelId,
+            bot: bot.label,
+            errorCode,
+          },
+          'Discord send failed: Missing Permissions (50013)',
+        );
+      }
+      logger.error(
+        { jid, channelId, bot: bot.label, err },
+        'Failed to send Discord message',
+      );
     }
   }
 

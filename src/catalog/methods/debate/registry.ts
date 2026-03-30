@@ -4,9 +4,17 @@ import {
   DebateModeId,
   DebateModeSpec,
   DebateOutputContract,
+  DebatePostRoundCollectionSpec,
   DebateProtocolSpec,
   DebateServiceOverlayContract,
 } from './types.js';
+
+const DEFAULT_POST_ROUND_COLLECTION: DebatePostRoundCollectionSpec = {
+  enabled: true,
+  triggerAfterRound: 1,
+  guidance:
+    'After round 1, collect missing evidence and unresolved assumptions before proceeding.',
+};
 
 const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
   standard: {
@@ -15,6 +23,7 @@ const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
     turnStrategy: 'round_robin',
     defaultRounds: 3,
     consensusPolicy: 'lead_final_judgment',
+    postRoundCollection: DEFAULT_POST_ROUND_COLLECTION,
     requiredRoleSlots: [
       { id: 'speaker_a', description: 'Primary discussant' },
       { id: 'speaker_b', description: 'Counter discussant' },
@@ -24,9 +33,10 @@ const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
       'final_judgment',
       'rationale',
       'minority_note',
+      'post_round_collection',
       'followups',
     ],
-    sourceModuleIds: ['quorum_cli', 'autoresearch'],
+    sourceModuleIds: ['quorum_cli', 'karpathy_loop'],
   },
   oxford: {
     id: 'oxford',
@@ -34,6 +44,7 @@ const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
     turnStrategy: 'structured_pro_con',
     defaultRounds: 3,
     consensusPolicy: 'lead_final_judgment',
+    postRoundCollection: DEFAULT_POST_ROUND_COLLECTION,
     requiredRoleSlots: [
       { id: 'proposer', description: 'Argues for the motion', stance: 'pro' },
       {
@@ -48,9 +59,10 @@ const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
       'final_judgment',
       'rationale',
       'minority_note',
+      'post_round_collection',
       'followups',
     ],
-    sourceModuleIds: ['quorum_cli', 'autoresearch'],
+    sourceModuleIds: ['quorum_cli', 'karpathy_loop'],
   },
   advocate: {
     id: 'advocate',
@@ -58,6 +70,7 @@ const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
     turnStrategy: 'challenge_and_rebuttal',
     defaultRounds: 3,
     consensusPolicy: 'lead_final_judgment',
+    postRoundCollection: DEFAULT_POST_ROUND_COLLECTION,
     requiredRoleSlots: [
       { id: 'defender', description: 'Defends the working direction' },
       { id: 'advocate', description: 'Challenges assumptions aggressively' },
@@ -67,9 +80,10 @@ const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
       'final_judgment',
       'rationale',
       'minority_note',
+      'post_round_collection',
       'followups',
     ],
-    sourceModuleIds: ['quorum_cli', 'autoresearch'],
+    sourceModuleIds: ['quorum_cli', 'karpathy_loop'],
   },
   socratic: {
     id: 'socratic',
@@ -77,6 +91,7 @@ const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
     turnStrategy: 'question_driven',
     defaultRounds: 4,
     consensusPolicy: 'lead_final_judgment',
+    postRoundCollection: DEFAULT_POST_ROUND_COLLECTION,
     requiredRoleSlots: [
       { id: 'questioner', description: 'Asks probing questions' },
       { id: 'respondent', description: 'Answers and refines claims' },
@@ -86,9 +101,10 @@ const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
       'final_judgment',
       'rationale',
       'minority_note',
+      'post_round_collection',
       'followups',
     ],
-    sourceModuleIds: ['quorum_cli', 'autoresearch'],
+    sourceModuleIds: ['quorum_cli', 'karpathy_loop'],
   },
   delphi: {
     id: 'delphi',
@@ -96,6 +112,7 @@ const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
     turnStrategy: 'iterative_convergence',
     defaultRounds: 3,
     consensusPolicy: 'lead_final_judgment',
+    postRoundCollection: DEFAULT_POST_ROUND_COLLECTION,
     requiredRoleSlots: [
       { id: 'estimator_a', description: 'Provides estimate pass A' },
       { id: 'estimator_b', description: 'Provides estimate pass B' },
@@ -106,9 +123,10 @@ const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
       'final_judgment',
       'rationale',
       'minority_note',
+      'post_round_collection',
       'followups',
     ],
-    sourceModuleIds: ['quorum_cli', 'autoresearch'],
+    sourceModuleIds: ['quorum_cli', 'karpathy_loop'],
   },
   brainstorm: {
     id: 'brainstorm',
@@ -116,6 +134,7 @@ const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
     turnStrategy: 'diverge_then_converge',
     defaultRounds: 3,
     consensusPolicy: 'lead_final_judgment',
+    postRoundCollection: DEFAULT_POST_ROUND_COLLECTION,
     requiredRoleSlots: [
       { id: 'ideator_a', description: 'Generates ideas quickly' },
       { id: 'ideator_b', description: 'Generates contrasting ideas quickly' },
@@ -126,9 +145,10 @@ const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
       'final_judgment',
       'rationale',
       'minority_note',
+      'post_round_collection',
       'followups',
     ],
-    sourceModuleIds: ['quorum_cli', 'autoresearch'],
+    sourceModuleIds: ['quorum_cli', 'karpathy_loop'],
   },
   tradeoff: {
     id: 'tradeoff',
@@ -136,6 +156,7 @@ const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
     turnStrategy: 'criteria_scoring',
     defaultRounds: 3,
     consensusPolicy: 'lead_final_judgment',
+    postRoundCollection: DEFAULT_POST_ROUND_COLLECTION,
     requiredRoleSlots: [
       { id: 'option_a', description: 'Argues option A', stance: 'pro' },
       { id: 'option_b', description: 'Argues option B', stance: 'con' },
@@ -150,9 +171,10 @@ const DEBATE_PROTOCOL_SPECS: Record<DebateModeId, DebateProtocolSpec> = {
       'final_judgment',
       'rationale',
       'minority_note',
+      'post_round_collection',
       'followups',
     ],
-    sourceModuleIds: ['quorum_cli', 'autoresearch'],
+    sourceModuleIds: ['quorum_cli', 'karpathy_loop'],
   },
 };
 
@@ -294,6 +316,7 @@ export function resolveDebateContracts(modeId: DebateModeId): {
       finalJudgment: '',
       rationale: '',
       minorityNote: null,
+      postRoundCollectionSummary: null,
       followups: [],
     },
   };

@@ -44,6 +44,11 @@ vi.mock('discord.js', () => {
     DirectMessages: 8,
   };
 
+  const PermissionFlagsBits = {
+    ViewChannel: 1n,
+    SendMessages: 2n,
+  };
+
   class MockClient {
     eventHandlers = new Map<string, Handler[]>();
     user: any = { id: '999888777', tag: 'Andy#1234' };
@@ -81,6 +86,9 @@ vi.mock('discord.js', () => {
       fetch: vi.fn().mockResolvedValue({
         send: vi.fn().mockResolvedValue(undefined),
         sendTyping: vi.fn().mockResolvedValue(undefined),
+        permissionsFor: vi.fn().mockReturnValue({
+          has: vi.fn().mockReturnValue(true),
+        }),
         fetchWebhooks: vi.fn().mockResolvedValue([]),
         createWebhook: vi.fn().mockResolvedValue({
           send: vi.fn().mockResolvedValue(undefined),
@@ -100,11 +108,13 @@ vi.mock('discord.js', () => {
     Client: MockClient,
     Events,
     GatewayIntentBits,
+    PermissionFlagsBits,
     TextChannel,
   };
 });
 
 import { DiscordChannel, DiscordChannelOpts } from './discord.js';
+import { logger } from '../logger.js';
 
 // --- Test helpers ---
 
@@ -225,6 +235,36 @@ describe('DiscordChannel', () => {
       expect(currentClient().eventHandlers.has('messageCreate')).toBe(true);
       expect(currentClient().eventHandlers.has('error')).toBe(true);
       expect(currentClient().eventHandlers.has('ready')).toBe(true);
+    });
+
+    it('logs permission healthcheck failure when send permission is missing', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+      const permissionHas = vi
+        .fn()
+        .mockImplementation((flag: bigint) => flag === 1n);
+      currentClient().channels.fetch.mockResolvedValue({
+        send: vi.fn().mockResolvedValue(undefined),
+        sendTyping: vi.fn().mockResolvedValue(undefined),
+        permissionsFor: vi.fn().mockReturnValue({
+          has: permissionHas,
+        }),
+        fetchWebhooks: vi.fn().mockResolvedValue([]),
+        createWebhook: vi.fn().mockResolvedValue({
+          send: vi.fn().mockResolvedValue(undefined),
+        }),
+      });
+      await (channel as any).runSendPermissionHealthcheck();
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bot: 'primary',
+          channelId: '1234567890123456',
+          missingPermissions: ['SendMessages'],
+        }),
+        'Discord permission healthcheck failed',
+      );
     });
 
     it('disconnects cleanly', async () => {
@@ -725,6 +765,28 @@ describe('DiscordChannel', () => {
       ).resolves.toBeUndefined();
     });
 
+    it('logs explicit 50013 diagnostics for missing Discord permissions', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      currentClient().channels.fetch.mockRejectedValueOnce(
+        Object.assign(new Error('Missing Permissions'), { code: 50013 }),
+      );
+
+      await channel.sendMessage('dc:1234567890123456', '권한 테스트');
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          jid: 'dc:1234567890123456',
+          channelId: '1234567890123456',
+          bot: 'primary',
+          errorCode: 50013,
+        }),
+        'Discord send failed: Missing Permissions (50013)',
+      );
+    });
+
     it('does nothing when client is not initialized', async () => {
       const opts = createTestOpts();
       const channel = new DiscordChannel('test-token', opts);
@@ -950,6 +1012,7 @@ describe('DiscordChannel', () => {
       const opts = createTestOpts();
       const channel = new DiscordChannel('test-token', opts);
       await channel.connect();
+      currentClient().channels.fetch.mockClear();
 
       await channel.setTyping('dc:1234567890123456', false);
 

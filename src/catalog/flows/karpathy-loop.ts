@@ -1,11 +1,11 @@
 import { FlowSpec } from './types.js';
 
-export const EXPERIMENT_LOOP_FLOW: FlowSpec = {
-  id: 'experiment-loop',
-  title: 'Experiment loop with independent verification',
+export const KARPATHY_LOOP_FLOW: FlowSpec = {
+  id: 'karpathy-loop',
+  title: 'Karpathy loop with independent verification',
   description:
-    'Service-neutral iteration loop for baseline capture, change execution, independent verification, and keep/discard decisions.',
-  sourceModuleIds: ['autoresearch'],
+    'Service-neutral iteration loop for baseline capture, change execution, independent verification, keep/discard decisions, and post-round information collection.',
+  sourceModuleIds: ['karpathy_loop'],
   stages: [
     {
       id: 'baseline',
@@ -31,6 +31,12 @@ export const EXPERIMENT_LOOP_FLOW: FlowSpec = {
       id: 'decide',
       title: 'Decide',
       description: 'Choose keep or discard according to decision policy.',
+    },
+    {
+      id: 'collect',
+      title: 'Collect',
+      description:
+        'Collect additional information after the first decision before the next round.',
     },
     {
       id: 'report',

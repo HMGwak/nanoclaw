@@ -25,7 +25,13 @@ export type DebateEvidenceType =
   | 'web'
   | 'file'
   | 'memory'
-  | 'autoresearch_brief';
+  | 'karpathy_loop_brief';
+
+export interface DebatePostRoundCollectionSpec {
+  enabled: boolean;
+  triggerAfterRound: number;
+  guidance: string;
+}
 
 export interface DebateRoleSpec {
   id: string;
@@ -39,12 +45,14 @@ export interface DebateProtocolSpec {
   turnStrategy: DebateTurnStrategy;
   defaultRounds: number;
   consensusPolicy: DebateConsensusPolicy;
+  postRoundCollection: DebatePostRoundCollectionSpec;
   requiredRoleSlots: DebateRoleSpec[];
   outputSections: Array<
     | 'round_summaries'
     | 'final_judgment'
     | 'rationale'
     | 'minority_note'
+    | 'post_round_collection'
     | 'followups'
   >;
   sourceModuleIds?: string[];
@@ -79,6 +87,7 @@ export interface DebateOutputContract {
   finalJudgment: string;
   rationale: string;
   minorityNote: string | null;
+  postRoundCollectionSummary: string | null;
   followups: string[];
 }
 

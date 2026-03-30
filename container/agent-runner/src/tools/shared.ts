@@ -391,6 +391,98 @@ function writeIpcTask(data: Record<string, unknown>): string {
   return filename;
 }
 
+type RawWorkflowStep = {
+  assignee?: unknown;
+  goal?: unknown;
+  acceptance_criteria?: unknown;
+  constraints?: unknown;
+  stage_id?: unknown;
+};
+
+type SanitizedWorkflowStep = {
+  assignee: string;
+  goal: string;
+  acceptance_criteria?: string | string[];
+  constraints?: string | string[];
+  stage_id?: string;
+};
+
+function normalizeOptionalTextList(
+  value: unknown,
+): string | string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (!Array.isArray(value)) return undefined;
+  const normalized = value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function sanitizeWorkflowStep(
+  raw: unknown,
+  index: number,
+): { ok: true; step: SanitizedWorkflowStep } | { ok: false; error: string } {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      ok: false,
+      error: `steps[${index}] must be an object with assignee and goal`,
+    };
+  }
+  const step = raw as RawWorkflowStep;
+  const assignee =
+    typeof step.assignee === 'string' ? step.assignee.trim() : '';
+  const goal = typeof step.goal === 'string' ? step.goal.trim() : '';
+  if (!assignee || !goal) {
+    return {
+      ok: false,
+      error: `steps[${index}] must include non-empty assignee and goal`,
+    };
+  }
+
+  const acceptanceCriteria = normalizeOptionalTextList(step.acceptance_criteria);
+  if (step.acceptance_criteria !== undefined && acceptanceCriteria === undefined) {
+    return {
+      ok: false,
+      error: `steps[${index}].acceptance_criteria must be a non-empty string or non-empty string array`,
+    };
+  }
+
+  const constraints = normalizeOptionalTextList(step.constraints);
+  if (step.constraints !== undefined && constraints === undefined) {
+    return {
+      ok: false,
+      error: `steps[${index}].constraints must be a non-empty string or non-empty string array`,
+    };
+  }
+
+  let stageId: string | undefined;
+  if (step.stage_id !== undefined) {
+    if (typeof step.stage_id !== 'string' || step.stage_id.trim().length === 0) {
+      return {
+        ok: false,
+        error: `steps[${index}].stage_id must be a non-empty string`,
+      };
+    }
+    stageId = step.stage_id.trim();
+  }
+
+  return {
+    ok: true,
+    step: {
+      assignee,
+      goal,
+      acceptance_criteria: acceptanceCriteria,
+      constraints,
+      stage_id: stageId,
+    },
+  };
+}
+
 async function runStartWorkflow(
   argsJson: string,
   ctx: ExecutorContext,
@@ -424,13 +516,27 @@ async function runStartWorkflow(
     });
   }
 
+  const sanitizedSteps: SanitizedWorkflowStep[] = [];
+  for (let i = 0; i < args.steps.length; i++) {
+    const parsed = sanitizeWorkflowStep(args.steps[i], i);
+    if (!parsed.ok) {
+      return JSON.stringify({ ok: false, error: parsed.error });
+    }
+    sanitizedSteps.push(parsed.step);
+  }
+
+  const requestedFlowId = args.flow_id?.trim();
+  const flowId = requestedFlowId && requestedFlowId.length > 0
+    ? requestedFlowId
+    : 'karpathy-loop';
+
   const workflowId = `wf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   writeIpcTask({
     type: 'start_workflow',
     workflowId,
     title: args.title.trim(),
-    flowId: args.flow_id || 'planning-workshop',
-    steps: args.steps,
+    flowId,
+    steps: sanitizedSteps,
     chatJid: ctx.chatJid,
     groupFolder: ctx.groupFolder,
     timestamp: new Date().toISOString(),
@@ -439,7 +545,7 @@ async function runStartWorkflow(
   return JSON.stringify({
     ok: true,
     workflowId,
-    message: `Workflow "${args.title.trim()}" requested.`,
+    message: `Workflow "${args.title.trim()}" request queued. Execution will start only after backend validation and confirmation.`,
   });
 }
 

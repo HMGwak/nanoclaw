@@ -36,6 +36,7 @@ const THIRD_GROUP: RegisteredGroup = {
 
 let groups: Record<string, RegisteredGroup>;
 let deps: IpcDeps;
+let sendMessageMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   _initTestDatabase();
@@ -51,8 +52,9 @@ beforeEach(() => {
   setRegisteredGroup('other@g.us', OTHER_GROUP);
   setRegisteredGroup('third@g.us', THIRD_GROUP);
 
+  sendMessageMock = vi.fn(async () => {});
   deps = {
-    sendMessage: async () => {},
+    sendMessage: sendMessageMock as IpcDeps['sendMessage'],
     registeredGroups: () => groups,
     registerGroup: (jid, group) => {
       groups[jid] = group;
@@ -713,13 +715,14 @@ describe('workflow IPC handlers', () => {
           goal: 'Implement',
           acceptance_criteria: ['tests pass'],
           constraints: undefined,
-          stage_id: 'execute',
+          stage_id: 'baseline',
         },
       ],
-      'planning-workshop',
+      'karpathy-loop',
       'discord_planning',
       'other@g.us',
     );
+    expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
   it('non-planning non-main group cannot start workflow', async () => {
@@ -740,6 +743,10 @@ describe('workflow IPC handlers', () => {
     );
 
     expect(onWorkflowRequested).not.toHaveBeenCalled();
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      'other@g.us',
+      expect.stringContaining('워크플로우 시작 실패'),
+    );
   });
 
   it('main group cannot bypass workflow start authorization', async () => {
@@ -760,6 +767,61 @@ describe('workflow IPC handlers', () => {
     );
 
     expect(onWorkflowRequested).not.toHaveBeenCalled();
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      'other@g.us',
+      expect.stringContaining('워크플로우 시작 실패'),
+    );
+  });
+
+  it('notifies source chat when workflow steps are invalid', async () => {
+    const onWorkflowRequested = vi.fn();
+    await processTaskIpc(
+      {
+        type: 'start_workflow',
+        title: 'Invalid steps',
+        chatJid: 'other@g.us',
+        steps: [{ assignee: '', goal: '' }],
+      },
+      'discord_planning',
+      false,
+      {
+        ...deps,
+        onWorkflowRequested,
+      },
+    );
+
+    expect(onWorkflowRequested).not.toHaveBeenCalled();
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      'other@g.us',
+      expect.stringContaining('워크플로우 시작 실패'),
+    );
+  });
+
+  it('rejects mixed valid/invalid steps instead of silently dropping invalid ones', async () => {
+    const onWorkflowRequested = vi.fn();
+    await processTaskIpc(
+      {
+        type: 'start_workflow',
+        title: 'Mixed steps',
+        chatJid: 'other@g.us',
+        steps: [
+          { assignee: 'third-group', goal: 'valid' },
+          { assignee: '', goal: '' },
+        ],
+      },
+      'discord_planning',
+      false,
+      {
+        ...deps,
+        onWorkflowRequested,
+      },
+    );
+
+    expect(onWorkflowRequested).not.toHaveBeenCalled();
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      'other@g.us',
+      expect.stringContaining('워크플로우 시작 실패'),
+    );
   });
 
   it('routes report_result and cancel_workflow callbacks', async () => {

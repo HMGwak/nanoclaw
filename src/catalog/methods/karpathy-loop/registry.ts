@@ -1,29 +1,39 @@
 import {
-  ExperimentLoopInputContract,
-  ExperimentLoopMethodSpec,
-  ExperimentLoopOutputContract,
+  KarpathyLoopInputContract,
+  KarpathyLoopInfoCollectionSpec,
+  KarpathyLoopMethodSpec,
+  KarpathyLoopOutputContract,
 } from './types.js';
 
-const EXPERIMENT_LOOP_METHODS: Record<string, ExperimentLoopMethodSpec> = {
-  experiment_loop_v1: {
-    id: 'experiment_loop_v1',
-    title: 'Experiment Loop v1',
+const DEFAULT_INFO_COLLECTION_POLICY: KarpathyLoopInfoCollectionSpec = {
+  enabled: true,
+  triggerAfterIteration: 1,
+  requiredEvidenceTypes: ['web', 'memory', 'artifact'],
+  guidance:
+    'After the first keep/discard decision, collect missing evidence before continuing to the next iteration.',
+};
+
+const KARPATHY_LOOP_METHODS: Record<string, KarpathyLoopMethodSpec> = {
+  karpathy_loop_v1: {
+    id: 'karpathy_loop_v1',
+    title: 'Karpathy Loop v1',
     description:
-      'Baseline-first iteration loop with execution, independent verification, and keep/discard judgment.',
-    sourceModuleIds: ['autoresearch'],
+      'Baseline-first iteration loop with execution, independent verification, keep/discard judgment, and post-round information collection.',
+    sourceModuleIds: ['karpathy_loop'],
     defaultRoleAssignments: {
       planner: 'openai_gpt54_planner',
       executor: 'openai_gpt54_generalist',
       verifier: 'openai_gpt54_reviewer',
       judge: 'openai_gpt54_reviewer',
     },
+    infoCollectionPolicy: DEFAULT_INFO_COLLECTION_POLICY,
   },
-  experiment_loop_memory_v2: {
-    id: 'experiment_loop_memory_v2',
-    title: 'Experiment Loop Memory v2',
+  karpathy_loop_memory_v2: {
+    id: 'karpathy_loop_memory_v2',
+    title: 'Karpathy Loop Memory v2',
     description:
-      'Stage-level experiment loop with append-only memory trail and bounded memory injection into subsequent steps.',
-    sourceModuleIds: ['autoresearch', 'entireio_cli'],
+      'Stage-level Karpathy loop with append-only memory trail, bounded memory injection, and post-round information collection.',
+    sourceModuleIds: ['karpathy_loop', 'entireio_cli'],
     defaultRoleAssignments: {
       planner: 'openai_gpt54_planner',
       executor: 'openai_gpt54_generalist',
@@ -42,22 +52,23 @@ const EXPERIMENT_LOOP_METHODS: Record<string, ExperimentLoopMethodSpec> = {
         maxRecords: 5,
       },
     },
+    infoCollectionPolicy: DEFAULT_INFO_COLLECTION_POLICY,
   },
 };
 
-export function listExperimentLoopMethodSpecs(): ExperimentLoopMethodSpec[] {
-  return Object.values(EXPERIMENT_LOOP_METHODS);
+export function listKarpathyLoopMethodSpecs(): KarpathyLoopMethodSpec[] {
+  return Object.values(KARPATHY_LOOP_METHODS);
 }
 
-export function getExperimentLoopMethodSpec(
+export function getKarpathyLoopMethodSpec(
   id: string,
-): ExperimentLoopMethodSpec | null {
-  return EXPERIMENT_LOOP_METHODS[id] || null;
+): KarpathyLoopMethodSpec | null {
+  return KARPATHY_LOOP_METHODS[id] || null;
 }
 
-export function resolveExperimentLoopContracts(): {
-  input: ExperimentLoopInputContract;
-  output: ExperimentLoopOutputContract;
+export function resolveKarpathyLoopContracts(): {
+  input: KarpathyLoopInputContract;
+  output: KarpathyLoopOutputContract;
 } {
   return {
     input: {
@@ -95,6 +106,7 @@ export function resolveExperimentLoopContracts(): {
           maxRecords: 5,
         },
       },
+      infoCollection: DEFAULT_INFO_COLLECTION_POLICY,
     },
     output: {
       baseline: {

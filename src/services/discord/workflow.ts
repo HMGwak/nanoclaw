@@ -1,5 +1,9 @@
 import { logger } from '../../logger.js';
-import { parseFlowSteps } from '../../catalog/flows/index.js';
+import {
+  getFlowSpec,
+  normalizeFlowId,
+  parseFlowSteps,
+} from '../../catalog/flows/index.js';
 import { WorkflowPlanStep } from '../../types.js';
 import { getDiscordCanonicalGroupFolderForFolder } from './bindings/groups.js';
 import { canStartWorkflowFromGroup } from '../index.js';
@@ -33,18 +37,104 @@ export interface DiscordWorkflowTaskPayload {
   resultSummary?: string;
 }
 
+function validateOptionalTextList(
+  value: unknown,
+  fieldName: string,
+): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'string') {
+    return value.trim().length > 0
+      ? undefined
+      : `${fieldName} must be a non-empty string or a non-empty string array`;
+  }
+  if (!Array.isArray(value) || value.length === 0) {
+    return `${fieldName} must be a non-empty string or a non-empty string array`;
+  }
+  for (const item of value) {
+    if (typeof item !== 'string' || item.trim().length === 0) {
+      return `${fieldName} must be a non-empty string or a non-empty string array`;
+    }
+  }
+  return undefined;
+}
+
+function validateWorkflowStep(raw: unknown, index: number): string | undefined {
+  if (!raw || typeof raw !== 'object') {
+    return `steps[${index}] must be an object with assignee and goal`;
+  }
+
+  const step = raw as {
+    assignee?: unknown;
+    goal?: unknown;
+    acceptance_criteria?: unknown;
+    constraints?: unknown;
+    stage_id?: unknown;
+  };
+
+  const assignee =
+    typeof step.assignee === 'string' ? step.assignee.trim() : '';
+  const goal = typeof step.goal === 'string' ? step.goal.trim() : '';
+  if (!assignee || !goal) {
+    return `steps[${index}] must include non-empty assignee and goal`;
+  }
+
+  const acceptanceError = validateOptionalTextList(
+    step.acceptance_criteria,
+    `steps[${index}].acceptance_criteria`,
+  );
+  if (acceptanceError) return acceptanceError;
+
+  const constraintsError = validateOptionalTextList(
+    step.constraints,
+    `steps[${index}].constraints`,
+  );
+  if (constraintsError) return constraintsError;
+
+  if (
+    step.stage_id !== undefined &&
+    (typeof step.stage_id !== 'string' || step.stage_id.trim().length === 0)
+  ) {
+    return `steps[${index}].stage_id must be a non-empty string`;
+  }
+
+  return undefined;
+}
+
+export type DiscordWorkflowStartResult =
+  | {
+      ok: true;
+      flowId: string;
+      stepCount: number;
+      chatJid: string;
+    }
+  | {
+      ok: false;
+      reason:
+        | 'unauthorized'
+        | 'invalid_payload'
+        | 'missing_chat_jid'
+        | 'invalid_flow_id'
+        | 'invalid_steps'
+        | 'missing_callback';
+      error: string;
+    };
+
 export function handleDiscordWorkflowStart(
   data: DiscordWorkflowTaskPayload,
   sourceGroup: string,
   isMain: boolean,
   deps: DiscordWorkflowIpcDeps,
-): void {
+): DiscordWorkflowStartResult {
   if (!canStartWorkflowFromGroup(sourceGroup)) {
     logger.warn(
       { sourceGroup, isMain },
       'Unauthorized start_workflow attempt blocked',
     );
-    return;
+    return {
+      ok: false,
+      reason: 'unauthorized',
+      error: `Group "${sourceGroup}" is not allowed to start workflows`,
+    };
   }
 
   if (!data.title || !Array.isArray(data.steps) || data.steps.length === 0) {
@@ -52,34 +142,104 @@ export function handleDiscordWorkflowStart(
       { data },
       'Invalid start_workflow request - missing title or steps',
     );
-    return;
+    return {
+      ok: false,
+      reason: 'invalid_payload',
+      error: 'start_workflow requires non-empty title and steps',
+    };
   }
 
-  const flowIdRaw = data.flowId ?? data.flow_id;
+  for (let i = 0; i < data.steps.length; i++) {
+    const stepError = validateWorkflowStep(data.steps[i], i);
+    if (stepError) {
+      logger.warn(
+        { sourceGroup, flowId: data.flowId ?? data.flow_id, stepIndex: i },
+        'Invalid start_workflow request - malformed step payload',
+      );
+      return {
+        ok: false,
+        reason: 'invalid_steps',
+        error: stepError,
+      };
+    }
+  }
+
+  const chatJid = typeof data.chatJid === 'string' ? data.chatJid.trim() : '';
+  if (!chatJid) {
+    logger.warn(
+      { sourceGroup },
+      'Invalid start_workflow request - missing chatJid',
+    );
+    return {
+      ok: false,
+      reason: 'missing_chat_jid',
+      error: 'chatJid is required for workflow routing',
+    };
+  }
+
+  const requestedFlowId = data.flowId ?? data.flow_id;
   const flowId =
-    typeof flowIdRaw === 'string' && flowIdRaw.trim().length > 0
-      ? flowIdRaw.trim()
-      : 'planning-workshop';
+    requestedFlowId === undefined || requestedFlowId === null
+      ? 'karpathy-loop'
+      : normalizeFlowId(String(requestedFlowId));
+  if (!flowId || !getFlowSpec(flowId)) {
+    logger.warn(
+      { sourceGroup, flowId: requestedFlowId },
+      'Invalid start_workflow request - unsupported flow id',
+    );
+    return {
+      ok: false,
+      reason: 'invalid_flow_id',
+      error: `Unsupported flow_id: "${String(requestedFlowId)}"`,
+    };
+  }
+
   const steps = parseFlowSteps(flowId, data.steps).map((step) => ({
     ...step,
     assignee:
       getDiscordCanonicalGroupFolderForFolder(step.assignee) || step.assignee,
   }));
-  if (steps.length === 0 || !deps.onWorkflowRequested) {
-    return;
+  if (steps.length === 0) {
+    logger.warn(
+      { sourceGroup, flowId, steps: data.steps },
+      'Invalid start_workflow request - no valid steps after parsing',
+    );
+    return {
+      ok: false,
+      reason: 'invalid_steps',
+      error:
+        'No valid workflow steps found. Each step must include non-empty assignee and goal.',
+    };
+  }
+  if (steps.length !== data.steps.length) {
+    logger.warn(
+      { sourceGroup, flowId, requested: data.steps.length, parsed: steps.length },
+      'Invalid start_workflow request - step normalization dropped entries',
+    );
+    return {
+      ok: false,
+      reason: 'invalid_steps',
+      error: 'Some workflow steps were invalid after normalization; request rejected.',
+    };
+  }
+  if (!deps.onWorkflowRequested) {
+    logger.error(
+      { sourceGroup, flowId },
+      'Workflow callback missing while handling start_workflow',
+    );
+    return {
+      ok: false,
+      reason: 'missing_callback',
+      error: 'Workflow engine callback is not configured',
+    };
   }
 
-  deps.onWorkflowRequested(
-    data.title,
-    steps,
-    flowId,
-    sourceGroup,
-    data.chatJid || '',
-  );
+  deps.onWorkflowRequested(data.title, steps, flowId, sourceGroup, chatJid);
   logger.info(
     { sourceGroup, flowId, title: data.title, stepCount: steps.length },
     'Workflow requested via Discord service IPC',
   );
+  return { ok: true, flowId, stepCount: steps.length, chatJid };
 }
 
 export function handleDiscordWorkflowResult(

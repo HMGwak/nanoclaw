@@ -529,7 +529,25 @@ export async function processTaskIpc(
       break;
 
     case 'start_workflow': {
-      handleDiscordWorkflowStart(data, sourceGroup, isMain, deps);
+      const result = handleDiscordWorkflowStart(data, sourceGroup, isMain, deps);
+      if (!result.ok) {
+        const sourceChatJid =
+          (typeof data.chatJid === 'string' && data.chatJid.trim()) ||
+          Object.entries(registeredGroups).find(
+            ([, group]) => group.folder === sourceGroup,
+          )?.[0];
+        if (!sourceChatJid) {
+          logger.warn(
+            { sourceGroup, reason: result.reason },
+            'Workflow start failed but source chatJid is unavailable',
+          );
+          break;
+        }
+        await deps.sendMessage(
+          sourceChatJid,
+          `워크플로우 시작 실패: ${result.error}`,
+        );
+      }
       break;
     }
 

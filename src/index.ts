@@ -835,9 +835,30 @@ async function main(): Promise<void> {
       if (workflowEngine) {
         workflowEngine
           .requestWorkflow(title, steps, sourceGroup, chatJid, flowId)
-          .catch((err) =>
-            logger.error({ err, title }, 'Failed to create workflow'),
-          );
+          .catch(async (err) => {
+            logger.error({ err, title }, 'Failed to create workflow');
+            if (!chatJid) return;
+            const reason = err instanceof Error ? err.message : String(err);
+            const channel = findChannel(channels, chatJid);
+            if (!channel) {
+              logger.warn(
+                { chatJid, title },
+                'Cannot send workflow failure message: channel not found',
+              );
+              return;
+            }
+            try {
+              await channel.sendMessage(
+                chatJid,
+                `워크플로우 시작 실패: ${reason}`,
+              );
+            } catch (sendErr) {
+              logger.error(
+                { err: sendErr, chatJid, title },
+                'Failed to send workflow failure message',
+              );
+            }
+          });
       }
     },
     onWorkflowStepResult: (workflowId, stepIndex, status, resultSummary) => {

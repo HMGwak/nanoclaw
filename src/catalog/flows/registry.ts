@@ -1,10 +1,8 @@
-import { EXPERIMENT_LOOP_FLOW } from './experiment-loop.js';
-import { PLANNING_WORKSHOP_FLOW } from './planning-workshop.js';
+import { KARPATHY_LOOP_FLOW } from './karpathy-loop.js';
 import { FlowSpec } from './types.js';
 
 const FLOWS: Record<string, FlowSpec> = {
-  [EXPERIMENT_LOOP_FLOW.id]: EXPERIMENT_LOOP_FLOW,
-  [PLANNING_WORKSHOP_FLOW.id]: PLANNING_WORKSHOP_FLOW,
+  [KARPATHY_LOOP_FLOW.id]: KARPATHY_LOOP_FLOW,
 };
 
 export function getFlowSpec(id: string): FlowSpec | null {

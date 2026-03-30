@@ -45,6 +45,8 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 - Service folders such as Discord or Symphony should compose existing catalog entries. They should not redefine agents, toolsets, flows, or SDK base profiles unless the change is genuinely generic and belongs back in the reusable catalog layer.
 - No patchwork architecture. Do not stack temporary routing layers, duplicate abstractions, or ad hoc compatibility shims when a direct design is possible.
 - Minimize fallbacks. Prefer one clear source of truth and one primary execution path. Add fallback behavior only when it is necessary for correctness or backwards compatibility.
+- Do not mask runtime failures with fallback responses that look like success. Never claim workflow/task execution succeeded unless backend registration and routing actually succeeded.
+- Fail fast on invalid execution requests. Missing required fields, invalid assignees, unauthorized starts, and missing chat identifiers must return explicit user-visible errors instead of silent drops.
 - Skills are first-class. If behavior is meant to be shared across providers, prefer the existing NanoClaw skill system and container skill source tree over inventing a parallel capability framework.
 - Keep provider-specific code narrow. Backend adapters may differ in transport or SDK usage, but they should consume the same high-level instructions, memory, and shared operational guidance whenever feasible.
 - Before changing architecture, verify it against actual repo docs and code paths, especially `README.md`, `CONTRIBUTING.md`, `src/container-runner.ts`, and `container/skills/`.

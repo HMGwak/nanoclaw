@@ -342,35 +342,51 @@ export const allTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       parameters: {
         type: 'object',
         properties: {
-          title: { type: 'string', description: 'Workflow title.' },
+          title: {
+            type: 'string',
+            minLength: 1,
+            description: 'Workflow title.',
+          },
           flow_id: {
             type: 'string',
+            minLength: 1,
             description:
-              'Optional flow id. Defaults to planning-workshop. Use experiment-loop for experiment workflows.',
+              'Optional flow id. Defaults to karpathy-loop.',
           },
           steps: {
             type: 'array',
+            minItems: 1,
             description: 'Ordered workflow steps.',
             items: {
               type: 'object',
               properties: {
                 assignee: {
                   type: 'string',
+                  minLength: 1,
                   description: 'Assignee group alias or role.',
                 },
-                goal: { type: 'string', description: 'Step goal.' },
+                goal: {
+                  type: 'string',
+                  minLength: 1,
+                  description: 'Step goal.',
+                },
                 acceptance_criteria: {
                   type: ['string', 'array'],
+                  minLength: 1,
+                  minItems: 1,
                   items: { type: 'string' },
                   description: 'Success conditions for this step.',
                 },
                 constraints: {
                   type: ['string', 'array'],
+                  minLength: 1,
+                  minItems: 1,
                   items: { type: 'string' },
                   description: 'Constraints for this step.',
                 },
                 stage_id: {
                   type: 'string',
+                  minLength: 1,
                   description: 'Optional stage id for stage-aware workflows.',
                 },
               },

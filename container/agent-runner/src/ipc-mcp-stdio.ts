@@ -501,36 +501,51 @@ server.tool(
   'start_workflow',
   'Start a workflow from the planning room. Assigns steps to workers and tracks progress end-to-end.',
   {
-    title: z.string().describe('Workflow title'),
+    title: z.string().trim().min(1).describe('Workflow title'),
     flow_id: z
       .string()
+      .trim()
+      .min(1)
       .optional()
-      .describe(
-        'Optional flow identifier. Defaults to "planning-workshop". Use "experiment-loop" for experiment-stage workflows.',
-      ),
+      .describe('Optional flow identifier. Defaults to "karpathy-loop".'),
     steps: z
       .array(
         z.object({
           assignee: z
             .string()
+            .trim()
+            .min(1)
             .describe('The worker or role assigned to this step'),
-          goal: z.string().describe('What this step must accomplish'),
+          goal: z
+            .string()
+            .trim()
+            .min(1)
+            .describe('What this step must accomplish'),
           acceptance_criteria: z
-            .union([z.string(), z.array(z.string())])
+            .union([
+              z.string().trim().min(1),
+              z.array(z.string().trim().min(1)).min(1),
+            ])
             .optional()
             .describe('Conditions that define success for this step'),
           constraints: z
-            .union([z.string(), z.array(z.string())])
+            .union([
+              z.string().trim().min(1),
+              z.array(z.string().trim().min(1)).min(1),
+            ])
             .optional()
             .describe('Constraints or guardrails for this step'),
           stage_id: z
             .string()
+            .trim()
+            .min(1)
             .optional()
             .describe(
               'Optional flow stage id for stage-aware memory and prompt routing.',
             ),
         }),
       )
+      .min(1)
       .describe('Ordered list of steps to execute'),
   },
   async (args) => {
@@ -552,7 +567,7 @@ server.tool(
       type: 'start_workflow',
       workflowId,
       title: args.title,
-      flowId: args.flow_id || 'planning-workshop',
+      flowId: args.flow_id || 'karpathy-loop',
       steps: args.steps,
       groupFolder,
       chatJid,
@@ -565,7 +580,7 @@ server.tool(
       content: [
         {
           type: 'text' as const,
-          text: `Workflow "${args.title}" started with ID ${workflowId} (${args.steps.length} steps).`,
+          text: `Workflow "${args.title}" request queued with ID ${workflowId} (${args.steps.length} steps).`,
         },
       ],
     };

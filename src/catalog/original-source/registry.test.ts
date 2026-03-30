@@ -6,7 +6,7 @@ import {
   listDebateModeSpecs,
   listDebateProtocolSpecs,
 } from '../methods/debate/index.js';
-import { listExperimentLoopMethodSpecs } from '../methods/experiment-loop/index.js';
+import { listKarpathyLoopMethodSpecs } from '../methods/karpathy-loop/index.js';
 import { listFlowSpecs } from '../flows/index.js';
 import { listToolsetSpecs } from '../toolsets/index.js';
 import {
@@ -20,11 +20,11 @@ describe('original source manifest registry', () => {
     const manifests = listOriginalSourceManifests();
 
     expect(manifests.length).toBeGreaterThan(0);
-    expect(getOriginalSourceManifest('autoresearch')).toMatchObject({
-      id: 'autoresearch',
+    expect(getOriginalSourceManifest('karpathy_loop')).toMatchObject({
+      id: 'karpathy_loop',
       origin: 'github-upstream-derived',
     });
-    expect(hasOriginalSourceManifest('autoresearch')).toBe(true);
+    expect(hasOriginalSourceManifest('karpathy_loop')).toBe(true);
     expect(getOriginalSourceManifest('entireio_cli')).toMatchObject({
       id: 'entireio_cli',
       origin: 'github-upstream-derived',
@@ -45,8 +45,8 @@ describe('original source manifest registry', () => {
     });
   });
 
-  it('keeps autoresearch snapshot provenance pinned to a concrete upstream commit', () => {
-    const manifest = getOriginalSourceManifest('autoresearch');
+  it('keeps karpathy-loop snapshot provenance pinned to a concrete upstream commit', () => {
+    const manifest = getOriginalSourceManifest('karpathy_loop');
     expect(manifest).not.toBeNull();
     expect(manifest?.notes || '').toContain(
       'https://github.com/karpathy/autoresearch',
@@ -58,7 +58,7 @@ describe('original source manifest registry', () => {
     const sourceNotesPath = path.resolve(
       process.cwd(),
       'original_source',
-      'autoresearch',
+      'karpathy_loop',
       'source',
       'README.md',
     );
@@ -69,7 +69,7 @@ describe('original source manifest registry', () => {
     const upstreamReadmePath = path.resolve(
       process.cwd(),
       'original_source',
-      'autoresearch',
+      'karpathy_loop',
       'source',
       'upstream',
       '228791fb499afffb54b46200aca536f79142f117',
@@ -122,8 +122,8 @@ describe('original source manifest registry', () => {
     }
   });
 
-  it('resolves all experiment-loop method source module references against preserved source manifests', () => {
-    for (const method of listExperimentLoopMethodSpecs()) {
+  it('resolves all karpathy-loop method source module references against preserved source manifests', () => {
+    for (const method of listKarpathyLoopMethodSpecs()) {
       for (const sourceModuleId of method.sourceModuleIds || []) {
         expect(
           hasOriginalSourceManifest(sourceModuleId),

@@ -22,8 +22,8 @@ describe('normalizeAgentOutput', () => {
 
   it('routes to a named speaker when the text starts with a speaker prefix', () => {
     expect(normalizeAgentOutput('키미: 제가 볼게요.', makeGroup())).toEqual({
-      text: '키미: 제가 볼게요.',
-      sender: '작업실 팀장',
+      text: '제가 볼게요.',
+      sender: '키미',
     });
   });
 
@@ -72,7 +72,7 @@ describe('normalizeAgentOutput', () => {
     ]);
   });
 
-  it('keeps non-configured speaker lines in the active speaker segment', () => {
+  it('keeps leading non-speaker lines in the active speaker segment', () => {
     const outputs = normalizeAgentOutputs(
       [
         '실시간 검색이 막혔습니다.',
@@ -85,14 +85,19 @@ describe('normalizeAgentOutput', () => {
       '키미',
     );
 
-    expect(outputs).toHaveLength(2);
+    expect(outputs).toHaveLength(3);
     expect(outputs[0]).toEqual({
       text: '실시간 검색이 막혔습니다.',
       sender: '키미',
     });
-    expect(outputs[1]?.sender).toBe('작업실 팀장');
-    expect(outputs[1]?.text).toContain('지금은 확인된 값만 말하겠습니다.');
-    expect(outputs[1]?.text).toContain('키미: 다른 출처를 다시 찾아볼게요.');
+    expect(outputs[1]).toEqual({
+      text: '지금은 확인된 값만 말하겠습니다.',
+      sender: '작업실 팀장',
+    });
+    expect(outputs[2]).toEqual({
+      text: '다른 출처를 다시 찾아볼게요.',
+      sender: '키미',
+    });
   });
 
   it('enforces a single sender when strict mode is enabled', () => {
@@ -111,7 +116,7 @@ describe('normalizeAgentOutput', () => {
 
     expect(outputs).toEqual([
       {
-        text: expect.stringContaining('먼저 상태 공유합니다.'),
+        text: '먼저 상태 공유합니다.',
         sender: '작업실 팀장',
       },
       {
@@ -119,7 +124,6 @@ describe('normalizeAgentOutput', () => {
         sender: '작업실 팀장',
       },
     ]);
-    expect(outputs[0]?.text).toContain('키미: 구현 체크는 제가 이어서 봅니다.');
   });
 
   it('drops mismatched visible blocks in single-sender mode', () => {
@@ -139,6 +143,17 @@ describe('normalizeAgentOutput', () => {
         sender: '작업실 팀장',
       },
     ]);
+  });
+
+  it('drops mismatched transcript segments in single-sender mode', () => {
+    expect(
+      normalizeAgentOutputs(
+        '키미: 제가 먼저 구현 체크를 하겠습니다.',
+        makeGroup(),
+        '작업실 팀장',
+        { enforceSingleSender: true },
+      ),
+    ).toEqual([]);
   });
 
   it('returns null when only internal output remains', () => {
