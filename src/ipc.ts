@@ -529,7 +529,12 @@ export async function processTaskIpc(
       break;
 
     case 'start_workflow': {
-      const result = handleDiscordWorkflowStart(data, sourceGroup, isMain, deps);
+      const result = handleDiscordWorkflowStart(
+        data,
+        sourceGroup,
+        isMain,
+        deps,
+      );
       if (!result.ok) {
         const sourceChatJid =
           (typeof data.chatJid === 'string' && data.chatJid.trim()) ||

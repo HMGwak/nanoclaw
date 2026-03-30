@@ -213,13 +213,19 @@ export function handleDiscordWorkflowStart(
   }
   if (steps.length !== data.steps.length) {
     logger.warn(
-      { sourceGroup, flowId, requested: data.steps.length, parsed: steps.length },
+      {
+        sourceGroup,
+        flowId,
+        requested: data.steps.length,
+        parsed: steps.length,
+      },
       'Invalid start_workflow request - step normalization dropped entries',
     );
     return {
       ok: false,
       reason: 'invalid_steps',
-      error: 'Some workflow steps were invalid after normalization; request rejected.',
+      error:
+        'Some workflow steps were invalid after normalization; request rejected.',
     };
   }
   if (!deps.onWorkflowRequested) {
