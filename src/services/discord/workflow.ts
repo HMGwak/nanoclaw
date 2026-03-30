@@ -167,7 +167,8 @@ export function handleDiscordWorkflowStart(
     return {
       ok: false,
       reason: 'invalid_payload',
-      error: 'flow_id is no longer accepted; start_workflow always uses karpathy-loop',
+      error:
+        'flow_id is no longer accepted; start_workflow always uses karpathy-loop',
     };
   }
 
@@ -261,7 +262,12 @@ export function handleDiscordWorkflowStart(
     },
     'Workflow requested via Discord service IPC',
   );
-  return { ok: true, flowId: KARPATHY_FLOW_ID, stepCount: steps.length, chatJid };
+  return {
+    ok: true,
+    flowId: KARPATHY_FLOW_ID,
+    stepCount: steps.length,
+    chatJid,
+  };
 }
 
 export function handleDiscordWorkflowResult(
