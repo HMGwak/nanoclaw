@@ -15,6 +15,16 @@ import { loadSubAgentManager } from './sub-agent-manager.js';
 const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
+const KARPATHY_STAGE_IDS = [
+  'baseline',
+  'change',
+  'run',
+  'verify',
+  'decide',
+  'collect',
+  'report',
+] as const;
+const KARPATHY_STAGE_ID_SET = new Set<string>(KARPATHY_STAGE_IDS);
 
 // Context from environment variables (set by the agent runner)
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
@@ -33,6 +43,193 @@ function writeIpcFile(dir: string, data: object): string {
   fs.renameSync(tempPath, filepath);
 
   return filename;
+}
+
+function normalizeRequiredString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeRequiredTextList(value: unknown): string | string[] | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (!Array.isArray(value)) return undefined;
+  const normalized = value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+type WorkflowIntakeMissingField = {
+  field: string;
+  question: string;
+  issue: 'missing' | 'invalid';
+};
+
+function buildWorkflowIntakeResult(input: {
+  title?: unknown;
+  steps?: unknown;
+}): {
+  ok: true;
+  ready: boolean;
+  flow: 'karpathy-loop';
+  required_fields: string[];
+  missing: WorkflowIntakeMissingField[];
+  questions: string[];
+  prepared?: {
+    title: string;
+    steps: Array<{
+      assignee: string;
+      goal: string;
+      acceptance_criteria: string | string[];
+      constraints: string | string[];
+      stage_id: string;
+    }>;
+  };
+  next_action: string;
+} {
+  const missing: WorkflowIntakeMissingField[] = [];
+  const preparedTitle = normalizeRequiredString(input.title);
+  if (!preparedTitle) {
+    missing.push({
+      field: 'title',
+      issue: 'missing',
+      question: '워크플로우 제목(title)을 알려주세요.',
+    });
+  }
+
+  const preparedSteps: Array<{
+    assignee: string;
+    goal: string;
+    acceptance_criteria: string | string[];
+    constraints: string | string[];
+    stage_id: string;
+  }> = [];
+
+  if (!Array.isArray(input.steps) || input.steps.length === 0) {
+    missing.push({
+      field: 'steps',
+      issue: 'missing',
+      question:
+        '최소 1개 이상의 step을 제공해주세요. 각 step에는 assignee/goal/acceptance_criteria/constraints/stage_id가 필요합니다.',
+    });
+  } else {
+    input.steps.forEach((rawStep, index) => {
+      if (!rawStep || typeof rawStep !== 'object') {
+        missing.push({
+          field: `steps[${index}]`,
+          issue: 'invalid',
+          question: `steps[${index}]를 객체 형태로 제공해주세요.`,
+        });
+        return;
+      }
+
+      const step = rawStep as {
+        assignee?: unknown;
+        goal?: unknown;
+        acceptance_criteria?: unknown;
+        constraints?: unknown;
+        stage_id?: unknown;
+      };
+
+      const assignee = normalizeRequiredString(step.assignee);
+      if (!assignee) {
+        missing.push({
+          field: `steps[${index}].assignee`,
+          issue: 'missing',
+          question: `steps[${index}] assignee(담당 그룹 folder)를 지정해주세요.`,
+        });
+      }
+
+      const goal = normalizeRequiredString(step.goal);
+      if (!goal) {
+        missing.push({
+          field: `steps[${index}].goal`,
+          issue: 'missing',
+          question: `steps[${index}] goal(무엇을 달성해야 하는지)을 지정해주세요.`,
+        });
+      }
+
+      const acceptanceCriteria = normalizeRequiredTextList(
+        step.acceptance_criteria,
+      );
+      if (!acceptanceCriteria) {
+        missing.push({
+          field: `steps[${index}].acceptance_criteria`,
+          issue: 'missing',
+          question: `steps[${index}] acceptance_criteria(완료 판정 기준)를 지정해주세요.`,
+        });
+      }
+
+      const constraints = normalizeRequiredTextList(step.constraints);
+      if (!constraints) {
+        missing.push({
+          field: `steps[${index}].constraints`,
+          issue: 'missing',
+          question: `steps[${index}] constraints(제약사항)를 지정해주세요.`,
+        });
+      }
+
+      const stageId = normalizeRequiredString(step.stage_id);
+      if (!stageId) {
+        missing.push({
+          field: `steps[${index}].stage_id`,
+          issue: 'missing',
+          question: `steps[${index}] stage_id를 지정해주세요. 허용값: ${KARPATHY_STAGE_IDS.join(', ')}`,
+        });
+      } else if (!KARPATHY_STAGE_ID_SET.has(stageId)) {
+        missing.push({
+          field: `steps[${index}].stage_id`,
+          issue: 'invalid',
+          question: `steps[${index}] stage_id는 ${KARPATHY_STAGE_IDS.join(', ')} 중 하나여야 합니다.`,
+        });
+      }
+
+      if (assignee && goal && acceptanceCriteria && constraints && stageId) {
+        preparedSteps.push({
+          assignee,
+          goal,
+          acceptance_criteria: acceptanceCriteria,
+          constraints,
+          stage_id: stageId,
+        });
+      }
+    });
+  }
+
+  const ready =
+    missing.length === 0 &&
+    typeof preparedTitle === 'string' &&
+    preparedSteps.length > 0;
+
+  return {
+    ok: true,
+    ready,
+    flow: 'karpathy-loop',
+    required_fields: [
+      'title',
+      'steps[].assignee',
+      'steps[].goal',
+      'steps[].acceptance_criteria',
+      'steps[].constraints',
+      'steps[].stage_id',
+    ],
+    missing,
+    questions: missing.map((item) => item.question),
+    prepared: ready
+      ? {
+          title: preparedTitle,
+          steps: preparedSteps,
+        }
+      : undefined,
+    next_action: ready
+      ? 'Call start_workflow with prepared.title and prepared.steps'
+      : 'Ask the user for missing fields and call workflow_intake again',
+  };
 }
 
 const server = new McpServer({
@@ -498,16 +695,44 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 );
 
 server.tool(
+  'workflow_intake',
+  'Validate workflow input completeness before start_workflow. Returns missing fields/questions or a ready-to-submit payload.',
+  {
+    title: z.string().optional().describe('Proposed workflow title.'),
+    steps: z
+      .array(
+        z.object({
+          assignee: z.string().optional(),
+          goal: z.string().optional(),
+          acceptance_criteria: z.union([z.string(), z.array(z.string())]).optional(),
+          constraints: z.union([z.string(), z.array(z.string())]).optional(),
+          stage_id: z.string().optional(),
+        }),
+      )
+      .optional()
+      .describe('Draft workflow steps (can be partial during intake).'),
+  },
+  async (args) => {
+    const result = buildWorkflowIntakeResult({
+      title: args.title,
+      steps: args.steps,
+    });
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(result, null, 2),
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
   'start_workflow',
-  'Start a workflow from the planning room. Assigns steps to workers and tracks progress end-to-end.',
+  'Start a workflow from the planning room using karpathy-loop. Assigns steps to workers and tracks progress end-to-end.',
   {
     title: z.string().trim().min(1).describe('Workflow title'),
-    flow_id: z
-      .string()
-      .trim()
-      .min(1)
-      .optional()
-      .describe('Optional flow identifier. Defaults to "karpathy-loop".'),
     steps: z
       .array(
         z.object({
@@ -526,22 +751,19 @@ server.tool(
               z.string().trim().min(1),
               z.array(z.string().trim().min(1)).min(1),
             ])
-            .optional()
             .describe('Conditions that define success for this step'),
           constraints: z
             .union([
               z.string().trim().min(1),
               z.array(z.string().trim().min(1)).min(1),
             ])
-            .optional()
             .describe('Constraints or guardrails for this step'),
           stage_id: z
             .string()
             .trim()
             .min(1)
-            .optional()
             .describe(
-              'Optional flow stage id for stage-aware memory and prompt routing.',
+              'Required karpathy-loop stage id for stage-aware memory and prompt routing.',
             ),
         }),
       )
@@ -567,7 +789,7 @@ server.tool(
       type: 'start_workflow',
       workflowId,
       title: args.title,
-      flowId: args.flow_id || 'karpathy-loop',
+      flowId: 'karpathy-loop',
       steps: args.steps,
       groupFolder,
       chatJid,

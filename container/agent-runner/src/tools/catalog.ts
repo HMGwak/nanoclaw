@@ -336,9 +336,56 @@ export const allTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
+      name: 'workflow_intake',
+      description:
+        'Validate workflow input completeness before start_workflow. Returns missing fields/questions or a ready-to-submit payload.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: {
+            type: 'string',
+            description: 'Proposed workflow title.',
+          },
+          steps: {
+            type: 'array',
+            description: 'Draft workflow steps (can be partial during intake).',
+            items: {
+              type: 'object',
+              properties: {
+                assignee: {
+                  type: 'string',
+                  description: 'Assignee group alias or role.',
+                },
+                goal: { type: 'string', description: 'Step goal.' },
+                acceptance_criteria: {
+                  type: ['string', 'array'],
+                  items: { type: 'string' },
+                  description: 'Success conditions for this step.',
+                },
+                constraints: {
+                  type: ['string', 'array'],
+                  items: { type: 'string' },
+                  description: 'Constraints for this step.',
+                },
+                stage_id: {
+                  type: 'string',
+                  description: 'Karpathy-loop stage id.',
+                },
+              },
+              additionalProperties: false,
+            },
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'start_workflow',
       description:
-        'Start a workflow from planning. Use after user explicitly approves workflow execution.',
+        'Start a workflow from planning using karpathy-loop. Use after user explicitly approves workflow execution.',
       parameters: {
         type: 'object',
         properties: {
@@ -346,12 +393,6 @@ export const allTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             type: 'string',
             minLength: 1,
             description: 'Workflow title.',
-          },
-          flow_id: {
-            type: 'string',
-            minLength: 1,
-            description:
-              'Optional flow id. Defaults to karpathy-loop.',
           },
           steps: {
             type: 'array',
@@ -375,22 +416,28 @@ export const allTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
                   minLength: 1,
                   minItems: 1,
                   items: { type: 'string' },
-                  description: 'Success conditions for this step.',
+                  description: 'Required success conditions for this step.',
                 },
                 constraints: {
                   type: ['string', 'array'],
                   minLength: 1,
                   minItems: 1,
                   items: { type: 'string' },
-                  description: 'Constraints for this step.',
+                  description: 'Required constraints for this step.',
                 },
                 stage_id: {
                   type: 'string',
                   minLength: 1,
-                  description: 'Optional stage id for stage-aware workflows.',
+                  description: 'Required karpathy-loop stage id.',
                 },
               },
-              required: ['assignee', 'goal'],
+              required: [
+                'assignee',
+                'goal',
+                'acceptance_criteria',
+                'constraints',
+                'stage_id',
+              ],
               additionalProperties: false,
             },
           },

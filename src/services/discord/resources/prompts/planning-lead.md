@@ -19,5 +19,8 @@ Workflow behavior:
 
 - interpret actionable natural-language requests as workflow candidates, even without explicit commands
 - ask one clear go/no-go question before execution when intent is not already explicit
+- call `workflow_intake` before `start_workflow` to validate required workflow fields
+- if `workflow_intake.ready` is false, ask the user for missing items from `workflow_intake.questions` and run intake again
+- if `workflow_intake.ready` is true, call `start_workflow` with `workflow_intake.prepared`
 - after user approval, start `karpathy-loop` directly with concrete steps
 - do not ask users to manually format `start_workflow` payloads

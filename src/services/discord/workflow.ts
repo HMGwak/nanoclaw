@@ -1,9 +1,5 @@
 import { logger } from '../../logger.js';
-import {
-  getFlowSpec,
-  normalizeFlowId,
-  parseFlowSteps,
-} from '../../catalog/flows/index.js';
+import { getFlowSpec, parseFlowSteps } from '../../catalog/flows/index.js';
 import { WorkflowPlanStep } from '../../types.js';
 import { getDiscordCanonicalGroupFolderForFolder } from './bindings/groups.js';
 import { canStartWorkflowFromGroup } from '../index.js';
@@ -27,8 +23,6 @@ export interface DiscordWorkflowIpcDeps {
 
 export interface DiscordWorkflowTaskPayload {
   title?: string;
-  flowId?: string;
-  flow_id?: string;
   steps?: unknown[];
   chatJid?: string;
   workflowId?: string;
@@ -37,22 +31,30 @@ export interface DiscordWorkflowTaskPayload {
   resultSummary?: string;
 }
 
-function validateOptionalTextList(
+const KARPATHY_FLOW_ID = 'karpathy-loop';
+const KARPATHY_STAGE_IDS = new Set(
+  (getFlowSpec(KARPATHY_FLOW_ID)?.stages || []).map((stage) => stage.id),
+);
+const KARPATHY_STAGE_IDS_TEXT = [...KARPATHY_STAGE_IDS].join(', ');
+
+function validateRequiredTextList(
   value: unknown,
   fieldName: string,
 ): string | undefined {
-  if (value === undefined || value === null) return undefined;
+  if (value === undefined || value === null) {
+    return `${fieldName} is required and must be a non-empty string or a non-empty string array`;
+  }
   if (typeof value === 'string') {
     return value.trim().length > 0
       ? undefined
-      : `${fieldName} must be a non-empty string or a non-empty string array`;
+      : `${fieldName} is required and must be a non-empty string or a non-empty string array`;
   }
   if (!Array.isArray(value) || value.length === 0) {
-    return `${fieldName} must be a non-empty string or a non-empty string array`;
+    return `${fieldName} is required and must be a non-empty string or a non-empty string array`;
   }
   for (const item of value) {
     if (typeof item !== 'string' || item.trim().length === 0) {
-      return `${fieldName} must be a non-empty string or a non-empty string array`;
+      return `${fieldName} is required and must be a non-empty string or a non-empty string array`;
     }
   }
   return undefined;
@@ -78,23 +80,24 @@ function validateWorkflowStep(raw: unknown, index: number): string | undefined {
     return `steps[${index}] must include non-empty assignee and goal`;
   }
 
-  const acceptanceError = validateOptionalTextList(
+  const acceptanceError = validateRequiredTextList(
     step.acceptance_criteria,
     `steps[${index}].acceptance_criteria`,
   );
   if (acceptanceError) return acceptanceError;
 
-  const constraintsError = validateOptionalTextList(
+  const constraintsError = validateRequiredTextList(
     step.constraints,
     `steps[${index}].constraints`,
   );
   if (constraintsError) return constraintsError;
 
-  if (
-    step.stage_id !== undefined &&
-    (typeof step.stage_id !== 'string' || step.stage_id.trim().length === 0)
-  ) {
-    return `steps[${index}].stage_id must be a non-empty string`;
+  if (typeof step.stage_id !== 'string' || step.stage_id.trim().length === 0) {
+    return `steps[${index}].stage_id is required and must be a non-empty string`;
+  }
+  const stageId = step.stage_id.trim();
+  if (!KARPATHY_STAGE_IDS.has(stageId)) {
+    return `steps[${index}].stage_id must be one of: ${KARPATHY_STAGE_IDS_TEXT}`;
   }
 
   return undefined;
@@ -113,7 +116,6 @@ export type DiscordWorkflowStartResult =
         | 'unauthorized'
         | 'invalid_payload'
         | 'missing_chat_jid'
-        | 'invalid_flow_id'
         | 'invalid_steps'
         | 'missing_callback';
       error: string;
@@ -148,12 +150,32 @@ export function handleDiscordWorkflowStart(
       error: 'start_workflow requires non-empty title and steps',
     };
   }
+  if (
+    Object.prototype.hasOwnProperty.call(
+      data as unknown as Record<string, unknown>,
+      'flow_id',
+    ) ||
+    Object.prototype.hasOwnProperty.call(
+      data as unknown as Record<string, unknown>,
+      'flowId',
+    )
+  ) {
+    logger.warn(
+      { sourceGroup },
+      'Invalid start_workflow request - flow_id is no longer accepted',
+    );
+    return {
+      ok: false,
+      reason: 'invalid_payload',
+      error: 'flow_id is no longer accepted; start_workflow always uses karpathy-loop',
+    };
+  }
 
   for (let i = 0; i < data.steps.length; i++) {
     const stepError = validateWorkflowStep(data.steps[i], i);
     if (stepError) {
       logger.warn(
-        { sourceGroup, flowId: data.flowId ?? data.flow_id, stepIndex: i },
+        { sourceGroup, stepIndex: i },
         'Invalid start_workflow request - malformed step payload',
       );
       return {
@@ -177,45 +199,28 @@ export function handleDiscordWorkflowStart(
     };
   }
 
-  const requestedFlowId = data.flowId ?? data.flow_id;
-  const flowId =
-    requestedFlowId === undefined || requestedFlowId === null
-      ? 'karpathy-loop'
-      : normalizeFlowId(String(requestedFlowId));
-  if (!flowId || !getFlowSpec(flowId)) {
-    logger.warn(
-      { sourceGroup, flowId: requestedFlowId },
-      'Invalid start_workflow request - unsupported flow id',
-    );
-    return {
-      ok: false,
-      reason: 'invalid_flow_id',
-      error: `Unsupported flow_id: "${String(requestedFlowId)}"`,
-    };
-  }
-
-  const steps = parseFlowSteps(flowId, data.steps).map((step) => ({
+  const steps = parseFlowSteps(KARPATHY_FLOW_ID, data.steps).map((step) => ({
     ...step,
     assignee:
       getDiscordCanonicalGroupFolderForFolder(step.assignee) || step.assignee,
   }));
   if (steps.length === 0) {
     logger.warn(
-      { sourceGroup, flowId, steps: data.steps },
+      { sourceGroup, flowId: KARPATHY_FLOW_ID, steps: data.steps },
       'Invalid start_workflow request - no valid steps after parsing',
     );
     return {
       ok: false,
       reason: 'invalid_steps',
       error:
-        'No valid workflow steps found. Each step must include non-empty assignee and goal.',
+        'No valid workflow steps found. Each step must include assignee, goal, acceptance_criteria, constraints, and stage_id.',
     };
   }
   if (steps.length !== data.steps.length) {
     logger.warn(
       {
         sourceGroup,
-        flowId,
+        flowId: KARPATHY_FLOW_ID,
         requested: data.steps.length,
         parsed: steps.length,
       },
@@ -230,7 +235,7 @@ export function handleDiscordWorkflowStart(
   }
   if (!deps.onWorkflowRequested) {
     logger.error(
-      { sourceGroup, flowId },
+      { sourceGroup, flowId: KARPATHY_FLOW_ID },
       'Workflow callback missing while handling start_workflow',
     );
     return {
@@ -240,12 +245,23 @@ export function handleDiscordWorkflowStart(
     };
   }
 
-  deps.onWorkflowRequested(data.title, steps, flowId, sourceGroup, chatJid);
+  deps.onWorkflowRequested(
+    data.title,
+    steps,
+    KARPATHY_FLOW_ID,
+    sourceGroup,
+    chatJid,
+  );
   logger.info(
-    { sourceGroup, flowId, title: data.title, stepCount: steps.length },
+    {
+      sourceGroup,
+      flowId: KARPATHY_FLOW_ID,
+      title: data.title,
+      stepCount: steps.length,
+    },
     'Workflow requested via Discord service IPC',
   );
-  return { ok: true, flowId, stepCount: steps.length, chatJid };
+  return { ok: true, flowId: KARPATHY_FLOW_ID, stepCount: steps.length, chatJid };
 }
 
 export function handleDiscordWorkflowResult(

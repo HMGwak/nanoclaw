@@ -13,9 +13,16 @@ describe('discord workflow service handlers', () => {
     const result = handleDiscordWorkflowStart(
       {
         title: '새 파이프라인',
-        flowId: 'karpathy-loop',
         chatJid: 'dc:1234:planning',
-        steps: [{ assignee: 'discord_workshop', goal: '구현' }],
+        steps: [
+          {
+            assignee: 'discord_workshop',
+            goal: '구현',
+            acceptance_criteria: ['테스트 통과'],
+            constraints: ['기존 API 호환 유지'],
+            stage_id: 'change',
+          },
+        ],
       },
       'discord_planning',
       false,
@@ -35,9 +42,9 @@ describe('discord workflow service handlers', () => {
           step_index: 0,
           assignee: 'discord_workshop_teamlead',
           goal: '구현',
-          acceptance_criteria: undefined,
-          constraints: undefined,
-          stage_id: 'baseline',
+          acceptance_criteria: ['테스트 통과'],
+          constraints: ['기존 API 호환 유지'],
+          stage_id: 'change',
         },
       ],
       'karpathy-loop',
@@ -46,71 +53,37 @@ describe('discord workflow service handlers', () => {
     );
   });
 
-  it('normalizes legacy flow ids to karpathy-loop', () => {
+  it('rejects explicit flow_id input', () => {
     const onWorkflowRequested = vi.fn();
+    const payload = {
+      title: 'flow id reject',
+      flowId: 'planning-workshop',
+      chatJid: 'dc:1234:planning',
+      steps: [
+        {
+          assignee: 'discord_workshop',
+          goal: '구현',
+          acceptance_criteria: ['테스트 통과'],
+          constraints: ['기존 API 호환 유지'],
+          stage_id: 'change',
+        },
+      ],
+    } as unknown as Parameters<typeof handleDiscordWorkflowStart>[0];
 
     const result = handleDiscordWorkflowStart(
-      {
-        title: '레거시 호환',
-        flowId: 'planning-workshop',
-        chatJid: 'dc:1234:planning',
-        steps: [{ assignee: 'discord_workshop', goal: '구현' }],
-      },
+      payload,
       'discord_planning',
       false,
       { onWorkflowRequested },
     );
 
     expect(result).toEqual({
-      ok: true,
-      flowId: 'karpathy-loop',
-      stepCount: 1,
-      chatJid: 'dc:1234:planning',
+      ok: false,
+      reason: 'invalid_payload',
+      error:
+        'flow_id is no longer accepted; start_workflow always uses karpathy-loop',
     });
-    expect(onWorkflowRequested).toHaveBeenCalledWith(
-      '레거시 호환',
-      [
-        expect.objectContaining({
-          stage_id: 'baseline',
-        }),
-      ],
-      'karpathy-loop',
-      'discord_planning',
-      'dc:1234:planning',
-    );
-  });
-
-  it('defaults missing flow id to karpathy-loop', () => {
-    const onWorkflowRequested = vi.fn();
-
-    const result = handleDiscordWorkflowStart(
-      {
-        title: '기본 플로우',
-        chatJid: 'dc:1234:planning',
-        steps: [{ assignee: 'discord_workshop', goal: '구현' }],
-      },
-      'discord_planning',
-      false,
-      { onWorkflowRequested },
-    );
-
-    expect(result).toEqual({
-      ok: true,
-      flowId: 'karpathy-loop',
-      stepCount: 1,
-      chatJid: 'dc:1234:planning',
-    });
-    expect(onWorkflowRequested).toHaveBeenCalledWith(
-      '기본 플로우',
-      [
-        expect.objectContaining({
-          stage_id: 'baseline',
-        }),
-      ],
-      'karpathy-loop',
-      'discord_planning',
-      'dc:1234:planning',
-    );
+    expect(onWorkflowRequested).not.toHaveBeenCalled();
   });
 
   it('blocks non-planning groups from starting workflows', () => {
@@ -120,7 +93,15 @@ describe('discord workflow service handlers', () => {
       {
         title: '차단 테스트',
         chatJid: 'dc:5678:workshop',
-        steps: [{ assignee: 'discord_workshop', goal: '구현' }],
+        steps: [
+          {
+            assignee: 'discord_workshop',
+            goal: '구현',
+            acceptance_criteria: ['테스트 통과'],
+            constraints: ['기존 API 호환 유지'],
+            stage_id: 'change',
+          },
+        ],
       },
       'discord_workshop',
       false,
@@ -141,7 +122,15 @@ describe('discord workflow service handlers', () => {
     const result = handleDiscordWorkflowStart(
       {
         title: 'missing chat jid',
-        steps: [{ assignee: 'discord_workshop', goal: '구현' }],
+        steps: [
+          {
+            assignee: 'discord_workshop',
+            goal: '구현',
+            acceptance_criteria: ['테스트 통과'],
+            constraints: ['기존 API 호환 유지'],
+            stage_id: 'change',
+          },
+        ],
       },
       'discord_planning',
       false,
@@ -162,9 +151,16 @@ describe('discord workflow service handlers', () => {
     const result = handleDiscordWorkflowStart(
       {
         title: 'invalid steps',
-        flowId: 'karpathy-loop',
         chatJid: 'dc:1234:planning',
-        steps: [{ assignee: '', goal: '' }],
+        steps: [
+          {
+            assignee: '',
+            goal: '',
+            acceptance_criteria: ['테스트 통과'],
+            constraints: ['기존 API 호환 유지'],
+            stage_id: 'change',
+          },
+        ],
       },
       'discord_planning',
       false,
@@ -185,11 +181,22 @@ describe('discord workflow service handlers', () => {
     const result = handleDiscordWorkflowStart(
       {
         title: 'mixed steps',
-        flowId: 'karpathy-loop',
         chatJid: 'dc:1234:planning',
         steps: [
-          { assignee: 'discord_workshop', goal: '유효 step' },
-          { assignee: '', goal: '' },
+          {
+            assignee: 'discord_workshop',
+            goal: '유효 step',
+            acceptance_criteria: ['테스트 통과'],
+            constraints: ['기존 API 호환 유지'],
+            stage_id: 'change',
+          },
+          {
+            assignee: '',
+            goal: '',
+            acceptance_criteria: ['테스트 통과'],
+            constraints: ['기존 API 호환 유지'],
+            stage_id: 'change',
+          },
         ],
       },
       'discord_planning',
@@ -201,6 +208,67 @@ describe('discord workflow service handlers', () => {
       ok: false,
       reason: 'invalid_steps',
       error: 'steps[1] must include non-empty assignee and goal',
+    });
+    expect(onWorkflowRequested).not.toHaveBeenCalled();
+  });
+
+  it('fails when required planning metadata is missing', () => {
+    const onWorkflowRequested = vi.fn();
+
+    const result = handleDiscordWorkflowStart(
+      {
+        title: 'missing acceptance',
+        chatJid: 'dc:1234:planning',
+        steps: [
+          {
+            assignee: 'discord_workshop',
+            goal: '유효 step',
+            constraints: ['기존 API 호환 유지'],
+            stage_id: 'change',
+          },
+        ],
+      },
+      'discord_planning',
+      false,
+      { onWorkflowRequested },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'invalid_steps',
+      error:
+        'steps[0].acceptance_criteria is required and must be a non-empty string or a non-empty string array',
+    });
+    expect(onWorkflowRequested).not.toHaveBeenCalled();
+  });
+
+  it('fails when stage_id is not a karpathy-loop stage', () => {
+    const onWorkflowRequested = vi.fn();
+
+    const result = handleDiscordWorkflowStart(
+      {
+        title: 'invalid stage',
+        chatJid: 'dc:1234:planning',
+        steps: [
+          {
+            assignee: 'discord_workshop',
+            goal: '유효 step',
+            acceptance_criteria: ['테스트 통과'],
+            constraints: ['기존 API 호환 유지'],
+            stage_id: 'execute',
+          },
+        ],
+      },
+      'discord_planning',
+      false,
+      { onWorkflowRequested },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'invalid_steps',
+      error:
+        'steps[0].stage_id must be one of: baseline, change, run, verify, decide, collect, report',
     });
     expect(onWorkflowRequested).not.toHaveBeenCalled();
   });
