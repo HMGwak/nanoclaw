@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { DEBATE_MODE_IDS } from './debate-orchestration.js';
 
 export const allTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
@@ -336,146 +337,61 @@ export const allTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
-      name: 'workflow_intake',
+      name: 'run_debate',
       description:
-        'Validate workflow input completeness before start_workflow. Returns missing fields/questions or a ready-to-submit payload.',
+        'Run a planning-led internal debate with workshop participants using objective evidence packs, and return round summaries plus a synthesis recommendation.',
       parameters: {
         type: 'object',
         properties: {
-          title: {
+          topic: {
             type: 'string',
-            description: 'Proposed workflow title.',
+            description: 'Debate topic or decision under review.',
           },
-          steps: {
+          mode: {
+            type: 'string',
+            enum: [...DEBATE_MODE_IDS],
+            description: 'Debate mode to run.',
+          },
+          rounds: {
+            type: 'number',
+            minimum: 1,
+            maximum: 12,
+            description: 'Optional round override.',
+          },
+          background_knowledge_refs: {
             type: 'array',
-            description: 'Draft workflow steps (can be partial during intake).',
+            items: { type: 'string' },
+            description: 'Optional background references or context pointers.',
+          },
+          evidence_packs: {
+            type: 'array',
+            description:
+              'Required structured evidence for the debate. Collect objective material first and pass it here so participants debate from the same evidence base.',
             items: {
               type: 'object',
               properties: {
-                assignee: {
+                type: {
                   type: 'string',
-                  description: 'Assignee group alias or role.',
+                  enum: ['web', 'file', 'memory', 'karpathy_loop_brief'],
+                  description: 'Evidence pack type.',
                 },
-                goal: { type: 'string', description: 'Step goal.' },
-                acceptance_criteria: {
-                  type: ['string', 'array'],
-                  items: { type: 'string' },
-                  description: 'Success conditions for this step.',
-                },
-                constraints: {
-                  type: ['string', 'array'],
-                  items: { type: 'string' },
-                  description: 'Constraints for this step.',
-                },
-                stage_id: {
+                ref: {
                   type: 'string',
-                  description: 'Karpathy-loop stage id.',
+                  minLength: 1,
+                  description: 'Reference identifier for the evidence pack.',
+                },
+                title: { type: 'string', description: 'Optional title.' },
+                summary: {
+                  type: 'string',
+                  description: 'Optional short summary.',
                 },
               },
+              required: ['type', 'ref'],
               additionalProperties: false,
             },
           },
         },
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'start_workflow',
-      description:
-        'Start a workflow from planning using karpathy-loop. Use after user explicitly approves workflow execution.',
-      parameters: {
-        type: 'object',
-        properties: {
-          title: {
-            type: 'string',
-            minLength: 1,
-            description: 'Workflow title.',
-          },
-          steps: {
-            type: 'array',
-            minItems: 1,
-            description: 'Ordered workflow steps.',
-            items: {
-              type: 'object',
-              properties: {
-                assignee: {
-                  type: 'string',
-                  minLength: 1,
-                  description: 'Assignee group alias or role.',
-                },
-                goal: {
-                  type: 'string',
-                  minLength: 1,
-                  description: 'Step goal.',
-                },
-                acceptance_criteria: {
-                  type: ['string', 'array'],
-                  minLength: 1,
-                  minItems: 1,
-                  items: { type: 'string' },
-                  description: 'Required success conditions for this step.',
-                },
-                constraints: {
-                  type: ['string', 'array'],
-                  minLength: 1,
-                  minItems: 1,
-                  items: { type: 'string' },
-                  description: 'Required constraints for this step.',
-                },
-                stage_id: {
-                  type: 'string',
-                  minLength: 1,
-                  description: 'Required karpathy-loop stage id.',
-                },
-              },
-              required: [
-                'assignee',
-                'goal',
-                'acceptance_criteria',
-                'constraints',
-                'stage_id',
-              ],
-              additionalProperties: false,
-            },
-          },
-        },
-        required: ['title', 'steps'],
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'report_result',
-      description: 'Report completion/failure for an assigned workflow step.',
-      parameters: {
-        type: 'object',
-        properties: {
-          workflow_id: { type: 'string' },
-          step_index: { type: 'number' },
-          status: { type: 'string', enum: ['completed', 'failed'] },
-          result_summary: { type: 'string' },
-        },
-        required: ['workflow_id', 'step_index', 'status', 'result_summary'],
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'cancel_workflow',
-      description: 'Cancel an in-progress workflow.',
-      parameters: {
-        type: 'object',
-        properties: {
-          workflow_id: { type: 'string' },
-        },
-        required: ['workflow_id'],
+        required: ['topic', 'mode', 'evidence_packs'],
         additionalProperties: false,
       },
     },

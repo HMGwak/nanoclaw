@@ -4,8 +4,6 @@
  */
 
 import { execFile } from 'child_process';
-import fs from 'fs';
-import path from 'path';
 import { promisify } from 'util';
 import { loadSubAgentManager } from '../sub-agent-manager.js';
 import {
@@ -26,6 +24,10 @@ import {
   playwrightExtract,
   playwrightPdf,
 } from './browse-playwright.js';
+import {
+  runDebateWithAgents,
+  validateDebateRequest,
+} from './debate-orchestration.js';
 import { ToolContext } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -47,6 +49,7 @@ interface ExecutorContext {
   chatJid?: string;
   groupFolder?: string;
   isMain?: boolean;
+  emitText?: (text: string) => void;
 }
 
 function getSubAgentManager() {
@@ -379,428 +382,47 @@ async function runAskAgent(
   }
 }
 
-const IPC_TASKS_DIR = '/workspace/ipc/tasks';
-const KARPATHY_STAGE_IDS = [
-  'baseline',
-  'change',
-  'run',
-  'verify',
-  'decide',
-  'collect',
-  'report',
-] as const;
-const KARPATHY_STAGE_ID_SET = new Set<string>(KARPATHY_STAGE_IDS);
-
-function writeIpcTask(data: Record<string, unknown>): string {
-  fs.mkdirSync(IPC_TASKS_DIR, { recursive: true });
-  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
-  const filepath = path.join(IPC_TASKS_DIR, filename);
-  const tempPath = `${filepath}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(data, null, 2));
-  fs.renameSync(tempPath, filepath);
-  return filename;
-}
-
-type RawWorkflowStep = {
-  assignee?: unknown;
-  goal?: unknown;
-  acceptance_criteria?: unknown;
-  constraints?: unknown;
-  stage_id?: unknown;
-};
-
-type RawWorkflowIntakeStep = {
-  assignee?: unknown;
-  goal?: unknown;
-  acceptance_criteria?: unknown;
-  constraints?: unknown;
-  stage_id?: unknown;
-};
-
-type SanitizedWorkflowStep = {
-  assignee: string;
-  goal: string;
-  acceptance_criteria: string | string[];
-  constraints: string | string[];
-  stage_id: string;
-};
-
-type WorkflowIntakeMissingField = {
-  field: string;
-  question: string;
-  issue: 'missing' | 'invalid';
-};
-
-function normalizeRequiredTextList(
-  value: unknown,
-): string | string[] | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
+async function runDebate(
+  argsJson: string,
+  ctx: ExecutorContext,
+): Promise<string> {
+  let args: unknown;
+  try {
+    args = JSON.parse(argsJson);
+  } catch {
+    return JSON.stringify({ ok: false, error: 'Invalid JSON' });
   }
-  if (!Array.isArray(value)) return undefined;
-  const normalized = value
-    .filter((item): item is string => typeof item === 'string')
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-  return normalized.length > 0 ? normalized : undefined;
-}
 
-function sanitizeWorkflowStep(
-  raw: unknown,
-  index: number,
-): { ok: true; step: SanitizedWorkflowStep } | { ok: false; error: string } {
-  if (!raw || typeof raw !== 'object') {
-    return {
+  const parsed = validateDebateRequest(args);
+  if (!parsed.ok) {
+    return JSON.stringify(parsed);
+  }
+
+  const manager = getSubAgentManager();
+  if (!manager || manager.size === 0) {
+    return JSON.stringify({
       ok: false,
-      error: `steps[${index}] must be an object with assignee and goal`,
-    };
-  }
-  const step = raw as RawWorkflowStep;
-  const assignee =
-    typeof step.assignee === 'string' ? step.assignee.trim() : '';
-  const goal = typeof step.goal === 'string' ? step.goal.trim() : '';
-  if (!assignee || !goal) {
-    return {
-      ok: false,
-      error: `steps[${index}] must include non-empty assignee and goal`,
-    };
+      error: 'run_debate requires configured internal debate participants',
+    });
   }
 
-  const acceptanceCriteria = normalizeRequiredTextList(
-    step.acceptance_criteria,
+  ctx.log(
+    `run_debate: mode=${parsed.request.mode} topic=${parsed.request.topic.slice(0, 120)}`,
   );
-  if (acceptanceCriteria === undefined) {
-    return {
-      ok: false,
-      error: `steps[${index}].acceptance_criteria is required and must be a non-empty string or non-empty string array`,
-    };
-  }
-
-  const constraints = normalizeRequiredTextList(step.constraints);
-  if (constraints === undefined) {
-    return {
-      ok: false,
-      error: `steps[${index}].constraints is required and must be a non-empty string or non-empty string array`,
-    };
-  }
-
-  if (typeof step.stage_id !== 'string' || step.stage_id.trim().length === 0) {
-    return {
-      ok: false,
-      error: `steps[${index}].stage_id is required and must be a non-empty string`,
-    };
-  }
-  const stageId = step.stage_id.trim();
-
-  return {
-    ok: true,
-    step: {
-      assignee,
-      goal,
-      acceptance_criteria: acceptanceCriteria,
-      constraints,
-      stage_id: stageId,
-    },
-  };
-}
-
-function normalizeRequiredString(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function collectWorkflowIntakeMissingFields(
-  title: unknown,
-  steps: unknown,
-): {
-  preparedTitle?: string;
-  preparedSteps: SanitizedWorkflowStep[];
-  missing: WorkflowIntakeMissingField[];
-} {
-  const missing: WorkflowIntakeMissingField[] = [];
-  const preparedTitle = normalizeRequiredString(title);
-  if (!preparedTitle) {
-    missing.push({
-      field: 'title',
-      issue: 'missing',
-      question: '워크플로우 제목(title)을 알려주세요.',
-    });
-  }
-
-  if (!Array.isArray(steps) || steps.length === 0) {
-    missing.push({
-      field: 'steps',
-      issue: 'missing',
-      question:
-        '최소 1개 이상의 step을 제공해주세요. 각 step에는 assignee/goal/acceptance_criteria/constraints/stage_id가 필요합니다.',
-    });
-    return { preparedTitle, preparedSteps: [], missing };
-  }
-
-  const preparedSteps: SanitizedWorkflowStep[] = [];
-  steps.forEach((rawStep, index) => {
-    if (!rawStep || typeof rawStep !== 'object') {
-      missing.push({
-        field: `steps[${index}]`,
-        issue: 'invalid',
-        question: `steps[${index}]를 객체 형태로 제공해주세요.`,
-      });
-      return;
-    }
-    const step = rawStep as RawWorkflowIntakeStep;
-
-    const assignee = normalizeRequiredString(step.assignee);
-    if (!assignee) {
-      missing.push({
-        field: `steps[${index}].assignee`,
-        issue: 'missing',
-        question: `steps[${index}] assignee(담당 그룹 folder)를 지정해주세요.`,
-      });
-    }
-
-    const goal = normalizeRequiredString(step.goal);
-    if (!goal) {
-      missing.push({
-        field: `steps[${index}].goal`,
-        issue: 'missing',
-        question: `steps[${index}] goal(무엇을 달성해야 하는지)을 지정해주세요.`,
-      });
-    }
-
-    const acceptanceCriteria = normalizeRequiredTextList(step.acceptance_criteria);
-    if (!acceptanceCriteria) {
-      missing.push({
-        field: `steps[${index}].acceptance_criteria`,
-        issue: 'missing',
-        question: `steps[${index}] acceptance_criteria(완료 판정 기준)를 지정해주세요.`,
-      });
-    }
-
-    const constraints = normalizeRequiredTextList(step.constraints);
-    if (!constraints) {
-      missing.push({
-        field: `steps[${index}].constraints`,
-        issue: 'missing',
-        question: `steps[${index}] constraints(제약사항)를 지정해주세요.`,
-      });
-    }
-
-    const stageId = normalizeRequiredString(step.stage_id);
-    if (!stageId) {
-      missing.push({
-        field: `steps[${index}].stage_id`,
-        issue: 'missing',
-        question: `steps[${index}] stage_id를 지정해주세요. 허용값: ${KARPATHY_STAGE_IDS.join(', ')}`,
-      });
-    } else if (!KARPATHY_STAGE_ID_SET.has(stageId)) {
-      missing.push({
-        field: `steps[${index}].stage_id`,
-        issue: 'invalid',
-        question: `steps[${index}] stage_id는 ${KARPATHY_STAGE_IDS.join(', ')} 중 하나여야 합니다.`,
-      });
-    }
-
-    if (assignee && goal && acceptanceCriteria && constraints && stageId) {
-      preparedSteps.push({
-        assignee,
-        goal,
-        acceptance_criteria: acceptanceCriteria,
-        constraints,
-        stage_id: stageId,
-      });
-    }
-  });
-
-  return { preparedTitle, preparedSteps, missing };
-}
-
-async function runWorkflowIntake(argsJson: string): Promise<string> {
-  let args: {
-    title?: string;
-    steps?: unknown[];
-  };
-  try {
-    args = JSON.parse(argsJson);
-  } catch {
-    return JSON.stringify({ ok: false, error: 'Invalid JSON' });
-  }
-
-  const { preparedTitle, preparedSteps, missing } =
-    collectWorkflowIntakeMissingFields(args.title, args.steps);
-  const ready =
-    missing.length === 0 &&
-    typeof preparedTitle === 'string' &&
-    preparedSteps.length > 0;
-
-  return JSON.stringify({
-    ok: true,
-    ready,
-    flow: 'karpathy-loop',
-    required_fields: [
-      'title',
-      'steps[].assignee',
-      'steps[].goal',
-      'steps[].acceptance_criteria',
-      'steps[].constraints',
-      'steps[].stage_id',
-    ],
-    missing,
-    questions: missing.map((item) => item.question),
-    prepared: ready
-      ? {
-          title: preparedTitle,
-          steps: preparedSteps,
-        }
-      : undefined,
-    next_action: ready
-      ? 'Call start_workflow with prepared.title and prepared.steps'
-      : 'Ask the user for missing fields and call workflow_intake again',
-  });
-}
-
-async function runStartWorkflow(
-  argsJson: string,
-  ctx: ExecutorContext,
-): Promise<string> {
-  let args: {
-    title: string;
-    steps: Array<{
-      assignee: string;
-      goal: string;
-      acceptance_criteria: string | string[];
-      constraints: string | string[];
-      stage_id: string;
-    }>;
-  };
-  try {
-    args = JSON.parse(argsJson);
-  } catch {
-    return JSON.stringify({ ok: false, error: 'Invalid JSON' });
-  }
-  if (!args.title?.trim()) {
-    return JSON.stringify({ ok: false, error: 'title is required' });
-  }
-  if (!Array.isArray(args.steps) || args.steps.length === 0) {
-    return JSON.stringify({ ok: false, error: 'steps must be a non-empty array' });
-  }
-  if (
-    Object.prototype.hasOwnProperty.call(
-      args as unknown as Record<string, unknown>,
-      'flow_id',
-    )
-  ) {
-    return JSON.stringify({
-      ok: false,
-      error: 'flow_id is no longer accepted; start_workflow always uses karpathy-loop',
-    });
-  }
-  if (!ctx.chatJid) {
-    return JSON.stringify({
-      ok: false,
-      error: 'chatJid is unavailable in this runtime; cannot start workflow',
-    });
-  }
-
-  const sanitizedSteps: SanitizedWorkflowStep[] = [];
-  for (let i = 0; i < args.steps.length; i++) {
-    const parsed = sanitizeWorkflowStep(args.steps[i], i);
-    if (!parsed.ok) {
-      return JSON.stringify({ ok: false, error: parsed.error });
-    }
-    sanitizedSteps.push(parsed.step);
-  }
-
-  const workflowId = `wf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  writeIpcTask({
-    type: 'start_workflow',
-    workflowId,
-    title: args.title.trim(),
-    flowId: 'karpathy-loop',
-    steps: sanitizedSteps,
-    chatJid: ctx.chatJid,
-    groupFolder: ctx.groupFolder,
-    timestamp: new Date().toISOString(),
-  });
-
-  return JSON.stringify({
-    ok: true,
-    workflowId,
-    message: `Workflow "${args.title.trim()}" request queued. Execution will start only after backend validation and confirmation.`,
-  });
-}
-
-async function runReportResult(
-  argsJson: string,
-  ctx: ExecutorContext,
-): Promise<string> {
-  let args: {
-    workflow_id: string;
-    step_index: number;
-    status: 'completed' | 'failed';
-    result_summary: string;
-  };
-  try {
-    args = JSON.parse(argsJson);
-  } catch {
-    return JSON.stringify({ ok: false, error: 'Invalid JSON' });
-  }
-  if (!args.workflow_id?.trim()) {
-    return JSON.stringify({ ok: false, error: 'workflow_id is required' });
-  }
-  if (!Number.isInteger(args.step_index) || args.step_index < 0) {
-    return JSON.stringify({ ok: false, error: 'step_index must be a non-negative integer' });
-  }
-  if (args.status !== 'completed' && args.status !== 'failed') {
-    return JSON.stringify({ ok: false, error: 'status must be completed or failed' });
-  }
-  if (!args.result_summary?.trim()) {
-    return JSON.stringify({ ok: false, error: 'result_summary is required' });
-  }
-
-  writeIpcTask({
-    type: 'report_result',
-    workflowId: args.workflow_id.trim(),
-    stepIndex: args.step_index,
-    status: args.status,
-    resultSummary: args.result_summary.trim(),
-    groupFolder: ctx.groupFolder,
-    timestamp: new Date().toISOString(),
-  });
-
-  return JSON.stringify({
-    ok: true,
-    message: `Workflow ${args.workflow_id} step ${args.step_index} reported as ${args.status}.`,
-  });
-}
-
-async function runCancelWorkflow(
-  argsJson: string,
-  ctx: ExecutorContext,
-): Promise<string> {
-  let args: { workflow_id: string };
-  try {
-    args = JSON.parse(argsJson);
-  } catch {
-    return JSON.stringify({ ok: false, error: 'Invalid JSON' });
-  }
-  if (!args.workflow_id?.trim()) {
-    return JSON.stringify({ ok: false, error: 'workflow_id is required' });
-  }
-
-  writeIpcTask({
-    type: 'cancel_workflow',
-    workflowId: args.workflow_id.trim(),
-    groupFolder: ctx.groupFolder,
-    timestamp: new Date().toISOString(),
-  });
-
-  return JSON.stringify({
-    ok: true,
-    message: `Workflow ${args.workflow_id} cancellation requested.`,
-  });
+  ctx.emitText?.(
+    [
+      '내부 토론을 시작합니다.',
+      `- 주제: ${parsed.request.topic}`,
+      `- 모드: ${parsed.request.mode}`,
+      `- 라운드 수: ${parsed.request.rounds}`,
+      '- 각 라운드가 끝날 때마다 중간 요약을 공유하고, 마지막에 최종 결론을 정리합니다.',
+    ].join('\n'),
+  );
+  return JSON.stringify(
+    await runDebateWithAgents(parsed.request, manager, ctx.log, (message) => {
+      ctx.emitText?.(message);
+    }),
+  );
 }
 
 function toToolCtx(ctx: ExecutorContext): ToolContext {
@@ -828,14 +450,8 @@ export async function executeTool(
       return runListAgents(ctx);
     case 'ask_agent':
       return runAskAgent(argsJson, ctx);
-    case 'workflow_intake':
-      return runWorkflowIntake(argsJson);
-    case 'start_workflow':
-      return runStartWorkflow(argsJson, ctx);
-    case 'report_result':
-      return runReportResult(argsJson, ctx);
-    case 'cancel_workflow':
-      return runCancelWorkflow(argsJson, ctx);
+    case 'run_debate':
+      return runDebate(argsJson, ctx);
 
     // Agent Browser tools
     case 'browse_open': {

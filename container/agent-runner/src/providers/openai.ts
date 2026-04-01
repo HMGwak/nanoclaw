@@ -122,6 +122,13 @@ async function runOpenAITurn(
         chatJid: context.containerInput.chatJid,
         groupFolder: context.containerInput.groupFolder,
         isMain: context.containerInput.isMain,
+        emitText: (text: string) => {
+          context.emitOutput({
+            status: 'success',
+            result: text,
+            newSessionId: sessionId,
+          });
+        },
       },
       maxLoops: MAX_TOOL_LOOPS,
     });

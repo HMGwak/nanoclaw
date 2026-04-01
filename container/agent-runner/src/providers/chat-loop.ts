@@ -20,6 +20,7 @@ interface LoopContext {
   chatJid?: string;
   groupFolder?: string;
   isMain?: boolean;
+  emitText?: (text: string) => void;
 }
 
 interface RunChatLoopOptions {

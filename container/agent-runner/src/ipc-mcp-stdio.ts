@@ -11,20 +11,15 @@ import fs from 'fs';
 import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
 import { loadSubAgentManager } from './sub-agent-manager.js';
+import {
+  DEBATE_MODE_IDS,
+  runDebateWithAgents,
+  validateDebateRequest,
+} from './tools/debate-orchestration.js';
 
 const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
-const KARPATHY_STAGE_IDS = [
-  'baseline',
-  'change',
-  'run',
-  'verify',
-  'decide',
-  'collect',
-  'report',
-] as const;
-const KARPATHY_STAGE_ID_SET = new Set<string>(KARPATHY_STAGE_IDS);
 
 // Context from environment variables (set by the agent runner)
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
@@ -43,193 +38,6 @@ function writeIpcFile(dir: string, data: object): string {
   fs.renameSync(tempPath, filepath);
 
   return filename;
-}
-
-function normalizeRequiredString(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function normalizeRequiredTextList(value: unknown): string | string[] | undefined {
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  }
-  if (!Array.isArray(value)) return undefined;
-  const normalized = value
-    .filter((item): item is string => typeof item === 'string')
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-  return normalized.length > 0 ? normalized : undefined;
-}
-
-type WorkflowIntakeMissingField = {
-  field: string;
-  question: string;
-  issue: 'missing' | 'invalid';
-};
-
-function buildWorkflowIntakeResult(input: {
-  title?: unknown;
-  steps?: unknown;
-}): {
-  ok: true;
-  ready: boolean;
-  flow: 'karpathy-loop';
-  required_fields: string[];
-  missing: WorkflowIntakeMissingField[];
-  questions: string[];
-  prepared?: {
-    title: string;
-    steps: Array<{
-      assignee: string;
-      goal: string;
-      acceptance_criteria: string | string[];
-      constraints: string | string[];
-      stage_id: string;
-    }>;
-  };
-  next_action: string;
-} {
-  const missing: WorkflowIntakeMissingField[] = [];
-  const preparedTitle = normalizeRequiredString(input.title);
-  if (!preparedTitle) {
-    missing.push({
-      field: 'title',
-      issue: 'missing',
-      question: '워크플로우 제목(title)을 알려주세요.',
-    });
-  }
-
-  const preparedSteps: Array<{
-    assignee: string;
-    goal: string;
-    acceptance_criteria: string | string[];
-    constraints: string | string[];
-    stage_id: string;
-  }> = [];
-
-  if (!Array.isArray(input.steps) || input.steps.length === 0) {
-    missing.push({
-      field: 'steps',
-      issue: 'missing',
-      question:
-        '최소 1개 이상의 step을 제공해주세요. 각 step에는 assignee/goal/acceptance_criteria/constraints/stage_id가 필요합니다.',
-    });
-  } else {
-    input.steps.forEach((rawStep, index) => {
-      if (!rawStep || typeof rawStep !== 'object') {
-        missing.push({
-          field: `steps[${index}]`,
-          issue: 'invalid',
-          question: `steps[${index}]를 객체 형태로 제공해주세요.`,
-        });
-        return;
-      }
-
-      const step = rawStep as {
-        assignee?: unknown;
-        goal?: unknown;
-        acceptance_criteria?: unknown;
-        constraints?: unknown;
-        stage_id?: unknown;
-      };
-
-      const assignee = normalizeRequiredString(step.assignee);
-      if (!assignee) {
-        missing.push({
-          field: `steps[${index}].assignee`,
-          issue: 'missing',
-          question: `steps[${index}] assignee(담당 그룹 folder)를 지정해주세요.`,
-        });
-      }
-
-      const goal = normalizeRequiredString(step.goal);
-      if (!goal) {
-        missing.push({
-          field: `steps[${index}].goal`,
-          issue: 'missing',
-          question: `steps[${index}] goal(무엇을 달성해야 하는지)을 지정해주세요.`,
-        });
-      }
-
-      const acceptanceCriteria = normalizeRequiredTextList(
-        step.acceptance_criteria,
-      );
-      if (!acceptanceCriteria) {
-        missing.push({
-          field: `steps[${index}].acceptance_criteria`,
-          issue: 'missing',
-          question: `steps[${index}] acceptance_criteria(완료 판정 기준)를 지정해주세요.`,
-        });
-      }
-
-      const constraints = normalizeRequiredTextList(step.constraints);
-      if (!constraints) {
-        missing.push({
-          field: `steps[${index}].constraints`,
-          issue: 'missing',
-          question: `steps[${index}] constraints(제약사항)를 지정해주세요.`,
-        });
-      }
-
-      const stageId = normalizeRequiredString(step.stage_id);
-      if (!stageId) {
-        missing.push({
-          field: `steps[${index}].stage_id`,
-          issue: 'missing',
-          question: `steps[${index}] stage_id를 지정해주세요. 허용값: ${KARPATHY_STAGE_IDS.join(', ')}`,
-        });
-      } else if (!KARPATHY_STAGE_ID_SET.has(stageId)) {
-        missing.push({
-          field: `steps[${index}].stage_id`,
-          issue: 'invalid',
-          question: `steps[${index}] stage_id는 ${KARPATHY_STAGE_IDS.join(', ')} 중 하나여야 합니다.`,
-        });
-      }
-
-      if (assignee && goal && acceptanceCriteria && constraints && stageId) {
-        preparedSteps.push({
-          assignee,
-          goal,
-          acceptance_criteria: acceptanceCriteria,
-          constraints,
-          stage_id: stageId,
-        });
-      }
-    });
-  }
-
-  const ready =
-    missing.length === 0 &&
-    typeof preparedTitle === 'string' &&
-    preparedSteps.length > 0;
-
-  return {
-    ok: true,
-    ready,
-    flow: 'karpathy-loop',
-    required_fields: [
-      'title',
-      'steps[].assignee',
-      'steps[].goal',
-      'steps[].acceptance_criteria',
-      'steps[].constraints',
-      'steps[].stage_id',
-    ],
-    missing,
-    questions: missing.map((item) => item.question),
-    prepared: ready
-      ? {
-          title: preparedTitle,
-          steps: preparedSteps,
-        }
-      : undefined,
-    next_action: ready
-      ? 'Call start_workflow with prepared.title and prepared.steps'
-      : 'Ask the user for missing fields and call workflow_intake again',
-  };
 }
 
 const server = new McpServer({
@@ -695,184 +503,77 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 );
 
 server.tool(
-  'workflow_intake',
-  'Validate workflow input completeness before start_workflow. Returns missing fields/questions or a ready-to-submit payload.',
+  'run_debate',
+  'Run a planning-led internal debate with workshop participants using objective evidence packs, and return round summaries plus a synthesis recommendation.',
   {
-    title: z.string().optional().describe('Proposed workflow title.'),
-    steps: z
-      .array(
-        z.object({
-          assignee: z.string().optional(),
-          goal: z.string().optional(),
-          acceptance_criteria: z.union([z.string(), z.array(z.string())]).optional(),
-          constraints: z.union([z.string(), z.array(z.string())]).optional(),
-          stage_id: z.string().optional(),
-        }),
-      )
+    topic: z
+      .string()
+      .trim()
+      .min(1)
+      .describe('Debate topic or decision under review.'),
+    mode: z.enum(DEBATE_MODE_IDS).describe('Debate mode to run.'),
+    rounds: z
+      .number()
+      .int()
+      .min(1)
+      .max(12)
       .optional()
-      .describe('Draft workflow steps (can be partial during intake).'),
-  },
-  async (args) => {
-    const result = buildWorkflowIntakeResult({
-      title: args.title,
-      steps: args.steps,
-    });
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify(result, null, 2),
-        },
-      ],
-    };
-  },
-);
-
-server.tool(
-  'start_workflow',
-  'Start a workflow from the planning room using karpathy-loop. Assigns steps to workers and tracks progress end-to-end.',
-  {
-    title: z.string().trim().min(1).describe('Workflow title'),
-    steps: z
+      .describe('Optional round override.'),
+    background_knowledge_refs: z
+      .array(z.string().trim().min(1))
+      .optional()
+      .describe('Optional background references or context pointers.'),
+    evidence_packs: z
       .array(
         z.object({
-          assignee: z
-            .string()
-            .trim()
-            .min(1)
-            .describe('The worker or role assigned to this step'),
-          goal: z
-            .string()
-            .trim()
-            .min(1)
-            .describe('What this step must accomplish'),
-          acceptance_criteria: z
-            .union([
-              z.string().trim().min(1),
-              z.array(z.string().trim().min(1)).min(1),
-            ])
-            .describe('Conditions that define success for this step'),
-          constraints: z
-            .union([
-              z.string().trim().min(1),
-              z.array(z.string().trim().min(1)).min(1),
-            ])
-            .describe('Constraints or guardrails for this step'),
-          stage_id: z
-            .string()
-            .trim()
-            .min(1)
-            .describe(
-              'Required karpathy-loop stage id for stage-aware memory and prompt routing.',
-            ),
+          type: z.enum(['web', 'file', 'memory', 'karpathy_loop_brief']),
+          ref: z.string().trim().min(1),
+          title: z.string().trim().min(1).optional(),
+          summary: z.string().trim().min(1).optional(),
         }),
       )
       .min(1)
-      .describe('Ordered list of steps to execute'),
+      .describe(
+        'Required structured evidence for the debate. Collect objective material first and pass it here so participants debate from the same evidence base.',
+      ),
   },
   async (args) => {
-    if (!isMain && !groupFolder.includes('planning')) {
+    const parsed = validateDebateRequest(args);
+    if (!parsed.ok) {
+      return {
+        content: [{ type: 'text' as const, text: parsed.error }],
+        isError: true,
+      };
+    }
+
+    const manager = loadSubAgentManager();
+    if (!manager || manager.size === 0) {
       return {
         content: [
           {
             type: 'text' as const,
-            text: 'Only the main group or a planning room can start workflows.',
+            text: 'run_debate requires configured internal debate participants.',
           },
         ],
         isError: true,
       };
     }
 
-    const workflowId = `wf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-    const data = {
-      type: 'start_workflow',
-      workflowId,
-      title: args.title,
-      flowId: 'karpathy-loop',
-      steps: args.steps,
-      groupFolder,
-      chatJid,
-      timestamp: new Date().toISOString(),
-    };
-
-    writeIpcFile(TASKS_DIR, data);
+    const result = await runDebateWithAgents(parsed.request, manager, () => {
+      // Debate tool logs stay quiet in stdio mode.
+    });
+    if (!result.ok) {
+      return {
+        content: [{ type: 'text' as const, text: result.error }],
+        isError: true,
+      };
+    }
 
     return {
       content: [
         {
           type: 'text' as const,
-          text: `Workflow "${args.title}" request queued with ID ${workflowId} (${args.steps.length} steps).`,
-        },
-      ],
-    };
-  },
-);
-
-server.tool(
-  'report_result',
-  'Report completion or failure of a workflow step from a worker room.',
-  {
-    workflow_id: z
-      .string()
-      .describe('The workflow ID returned by start_workflow'),
-    step_index: z
-      .number()
-      .int()
-      .min(0)
-      .describe('Zero-based index of the completed step'),
-    status: z
-      .enum(['completed', 'failed'])
-      .describe('Whether the step succeeded or failed'),
-    result_summary: z
-      .string()
-      .describe('Summary of what was done or what went wrong'),
-  },
-  async (args) => {
-    const data = {
-      type: 'report_result',
-      workflowId: args.workflow_id,
-      stepIndex: args.step_index,
-      status: args.status,
-      resultSummary: args.result_summary,
-      groupFolder,
-      timestamp: new Date().toISOString(),
-    };
-
-    writeIpcFile(TASKS_DIR, data);
-
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `Step ${args.step_index} of workflow ${args.workflow_id} reported as ${args.status}.`,
-        },
-      ],
-    };
-  },
-);
-
-server.tool(
-  'cancel_workflow',
-  'Cancel an in-progress workflow.',
-  {
-    workflow_id: z.string().describe('The workflow ID to cancel'),
-  },
-  async (args) => {
-    const data = {
-      type: 'cancel_workflow',
-      workflowId: args.workflow_id,
-      groupFolder,
-      timestamp: new Date().toISOString(),
-    };
-
-    writeIpcFile(TASKS_DIR, data);
-
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `Workflow ${args.workflow_id} cancellation requested.`,
+          text: JSON.stringify(result, null, 2),
         },
       ],
     };
