@@ -2,7 +2,7 @@
  * Step: verify — End-to-end health check of the full installation.
  * Replaces 09-verify.sh
  *
- * Uses better-sqlite3 directly (no sqlite3 CLI), platform-aware service checks.
+ * Uses better-sqlite3 directly (no sqlite3 CLI), Docker-only runtime checks.
  */
 import { execSync } from 'child_process';
 import fs from 'fs';
@@ -14,87 +14,50 @@ import Database from 'better-sqlite3';
 import { STORE_DIR } from '../src/config.js';
 import { readEnvFile } from '../src/env.js';
 import { logger } from '../src/logger.js';
-import {
-  getPlatform,
-  getServiceManager,
-  hasSystemd,
-  isRoot,
-} from './platform.js';
 import { emitStatus } from './status.js';
 
 export async function run(_args: string[]): Promise<void> {
   const projectRoot = process.cwd();
-  const platform = getPlatform();
   const homeDir = os.homedir();
 
   logger.info('Starting verification');
 
-  // 1. Check service status
-  let service = 'not_found';
-  const mgr = getServiceManager();
-
-  if (mgr === 'launchd') {
-    try {
-      const output = execSync('launchctl list', { encoding: 'utf-8' });
-      if (output.includes('com.nanoclaw')) {
-        // Check if it has a PID (actually running)
-        const line = output.split('\n').find((l) => l.includes('com.nanoclaw'));
-        if (line) {
-          const pidField = line.trim().split(/\s+/)[0];
-          service = pidField !== '-' && pidField ? 'running' : 'stopped';
-        }
-      }
-    } catch {
-      // launchctl not available
-    }
-  } else if (mgr === 'systemd') {
-    const prefix = isRoot() ? 'systemctl' : 'systemctl --user';
-    try {
-      execSync(`${prefix} is-active nanoclaw`, { stdio: 'ignore' });
-      service = 'running';
-    } catch {
-      try {
-        const output = execSync(`${prefix} list-unit-files`, {
-          encoding: 'utf-8',
-        });
-        if (output.includes('nanoclaw')) {
-          service = 'stopped';
-        }
-      } catch {
-        // systemctl not available
-      }
-    }
-  } else {
-    // Check for nohup PID file
-    const pidFile = path.join(projectRoot, 'nanoclaw.pid');
-    if (fs.existsSync(pidFile)) {
-      try {
-        const raw = fs.readFileSync(pidFile, 'utf-8').trim();
-        const pid = Number(raw);
-        if (raw && Number.isInteger(pid) && pid > 0) {
-          process.kill(pid, 0);
-          service = 'running';
-        }
-      } catch {
-        service = 'stopped';
-      }
-    }
-  }
-  logger.info({ service }, 'Service status');
-
-  // 2. Check container runtime
+  // 1. Check container runtime
   let containerRuntime = 'none';
+  let runtimeHealthy = false;
   try {
     execSync('command -v container', { stdio: 'ignore' });
     containerRuntime = 'apple-container';
+    runtimeHealthy = true;
   } catch {
     try {
       execSync('docker info', { stdio: 'ignore' });
       containerRuntime = 'docker';
+      runtimeHealthy = true;
     } catch {
       // No runtime
     }
   }
+  logger.info({ containerRuntime, runtimeHealthy }, 'Container runtime status');
+
+  // 2. Check NanoClaw process via Docker container list (Docker-only policy)
+  let service = 'not_found';
+  if (containerRuntime === 'docker') {
+    try {
+      const names = execSync("docker ps --format '{{.Names}}'", {
+        encoding: 'utf-8',
+      })
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+      service = names.some((name) => name.includes('nanoclaw'))
+        ? 'running'
+        : 'stopped';
+    } catch {
+      service = 'not_found';
+    }
+  }
+  logger.info({ service }, 'NanoClaw runtime status');
 
   // 3. Check credentials
   let credentials = 'missing';
@@ -171,6 +134,7 @@ export async function run(_args: string[]): Promise<void> {
 
   // Determine overall status
   const status =
+    runtimeHealthy &&
     service === 'running' &&
     credentials !== 'missing' &&
     anyChannelConfigured &&

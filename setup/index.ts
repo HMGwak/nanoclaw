@@ -15,7 +15,6 @@ const STEPS: Record<
   groups: () => import('./groups.js'),
   register: () => import('./register.js'),
   mounts: () => import('./mounts.js'),
-  service: () => import('./service.js'),
   verify: () => import('./verify.js'),
 };
 
