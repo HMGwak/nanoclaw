@@ -21,21 +21,30 @@ export interface DiscordGroupBindingSpec {
   canStartWorkflow?: boolean;
 }
 
+function buildWorkshopSenderBotMap(
+  resourceId: string,
+): Record<string, string> | undefined {
+  if (resourceId === 'discord-workshop-teamlead') {
+    return {
+      '작업실 팀장': 'workshop',
+      키미: 'kimi',
+    };
+  }
+  if (resourceId === 'discord-workshop-kimi') {
+    return {
+      키미: 'kimi',
+    };
+  }
+  return undefined;
+}
+
 const DISCORD_GROUP_BINDINGS: DiscordGroupBindingSpec[] =
   listDiscordBotResources().map((resource) => ({
     teammatePersonnelIds:
       resource.id === 'discord-workshop-teamlead'
         ? ['discord_workshop_kimi']
-        : resource.id === 'discord-workshop-kimi'
-          ? ['discord_workshop_teamlead']
-          : [],
-    senderBotMap:
-      resource.departmentId === 'workshop'
-        ? {
-            '작업실 팀장': 'workshop',
-            키미: 'kimi',
-          }
-        : undefined,
+        : [],
+    senderBotMap: buildWorkshopSenderBotMap(resource.id),
     id: resource.id,
     departmentId: resource.departmentId,
     canonicalGroupFolder: resource.canonicalGroupFolder,

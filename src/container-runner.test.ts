@@ -51,8 +51,14 @@ vi.mock('fs', async () => {
         if (filepath.includes('workshop-kimi.md')) {
           return 'kimi persona prompt';
         }
+        if (filepath.includes('planning-lead.md')) {
+          return 'planning persona prompt';
+        }
         if (filepath.includes('/departments/workshop/AGENTS.md')) {
           return 'workshop department prompt';
+        }
+        if (filepath.includes('/departments/planning/AGENTS.md')) {
+          return 'planning department prompt';
         }
         if (filepath.includes('/departments/handoff/template.md')) {
           return 'handoff template';
@@ -310,10 +316,68 @@ describe('container instruction layers', () => {
         content: expect.stringContaining('Lead: 작업실 팀장'),
       },
     ]);
-    expect(containerInput.instructionLayers[3].content).not.toContain(
-      'Teammate:',
+    expect(containerInput.instructionLayers[3].content).toContain(
+      'Teammate: 키미',
     );
-    expect(containerInput.subAgents).toBeUndefined();
+    expect(containerInput.subAgents).toEqual([
+      expect.objectContaining({
+        name: '키미',
+        systemPrompt: expect.stringContaining('workshop department prompt'),
+      }),
+    ]);
+
+    emitOutputMarker(fakeProc, { status: 'success', result: 'ok' });
+    fakeProc.emit('close', 0);
+    await resultPromise;
+  });
+
+  it('adds a debate intent layer for planning when the prompt contains debate keywords', async () => {
+    let stdinData = '';
+    fakeProc = createFakeProcess();
+    fakeProc.stdin.on('data', (chunk) => {
+      stdinData += chunk.toString();
+    });
+
+    const resultPromise = runContainerAgent(
+      {
+        ...testGroup,
+        folder: 'discord_planning',
+        name: '기획실',
+      },
+      {
+        ...testInput,
+        prompt: '이 구조로 토론해봐',
+        groupFolder: 'discord_planning',
+      },
+      () => {},
+      async () => {},
+    );
+    await new Promise<void>((resolve) => fakeProc.stdin.on('finish', resolve));
+
+    const containerInput = JSON.parse(stdinData);
+    expect(containerInput.instructionLayers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'service-debate-intent:discord-planning-bot',
+          content: expect.stringContaining('Debate keyword detected'),
+        }),
+      ]),
+    );
+    const debateLayer = containerInput.instructionLayers.find(
+      (layer: { id: string; content: string }) =>
+        layer.id === 'service-debate-intent:discord-planning-bot',
+    );
+    expect(debateLayer?.content).toContain(
+      'Treat this as an explicit trigger to call `run_debate`',
+    );
+    expect(debateLayer?.content).toContain(
+      'Before calling `run_debate`, gather objective evidence',
+    );
+    expect(debateLayer?.content).toContain(
+      'Pass that evidence through `evidence_packs`',
+    );
+    expect(debateLayer?.content).toContain('Mode hint: standard');
+    expect(debateLayer?.content).toContain('Topic: 이 구조로 토론해봐');
 
     emitOutputMarker(fakeProc, { status: 'success', result: 'ok' });
     fakeProc.emit('close', 0);

@@ -23,6 +23,10 @@ export {
   getDiscordLocalToolsetSpec,
   listDiscordLocalToolsetSpecs,
 } from './resources/toolsets.js';
+export {
+  getDiscordDebateServiceSpecForGroup,
+  listDiscordDebateServiceSpecs,
+} from './resources/debate.js';
 export { getDiscordDepartmentPrompt } from './departments/index.js';
 export {
   normalizeDiscordPersonaText,

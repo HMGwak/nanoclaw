@@ -1,5 +1,6 @@
-import { RegisteredGroup } from '../../types.js';
+import { RegisteredGroup, SubAgentConfig } from '../../types.js';
 import {
+  resolveGroupImportedSubAgents,
   resolveGroupLeadSender,
   resolveGroupSpeakerNames,
   resolveServiceDeployment,
@@ -10,6 +11,8 @@ export interface AgentTeamSpec {
   lead: ResolvedAgentRuntimeSpec | null;
   teammates: ResolvedAgentRuntimeSpec[];
   teammateConfigs: ResolvedAgentRuntimeSpec[];
+  importedSubAgents: SubAgentConfig[];
+  delegateConfigs: SubAgentConfig[];
   speakerNames: string[];
 }
 
@@ -28,17 +31,22 @@ function buildTeammateSystemPrompt(
 
 export function buildGroupAgentTeam(group: RegisteredGroup): AgentTeamSpec {
   const deployment = resolveServiceDeployment(group);
+  const teammateConfigs =
+    deployment?.teammates.map((teammate) => ({
+      ...teammate,
+      systemPrompt: buildTeammateSystemPrompt(
+        teammate,
+        deployment.departmentPrompt,
+      ),
+    })) || [];
+  const importedSubAgents = resolveGroupImportedSubAgents(group);
+
   return {
     lead: deployment?.lead || null,
     teammates: deployment?.teammates || [],
-    teammateConfigs:
-      deployment?.teammates.map((teammate) => ({
-        ...teammate,
-        systemPrompt: buildTeammateSystemPrompt(
-          teammate,
-          deployment.departmentPrompt,
-        ),
-      })) || [],
+    teammateConfigs,
+    importedSubAgents,
+    delegateConfigs: [...teammateConfigs, ...importedSubAgents],
     speakerNames: resolveGroupSpeakerNames(group),
   };
 }

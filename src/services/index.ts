@@ -2,12 +2,13 @@ import { getAgentSpec } from '../catalog/agents/index.js';
 import { getSdkProfileSpec } from '../catalog/sdk-profiles/index.js';
 import { getToolsetSpec } from '../catalog/toolsets/index.js';
 import { BrowserToolPolicySpec } from '../catalog/toolsets/types.js';
-import { RegisteredGroup } from '../types.js';
+import { RegisteredGroup, SubAgentConfig } from '../types.js';
 import { getDiscordDepartmentSpec } from './discord/departments/index.js';
 import { getDiscordDeploymentForGroup } from './discord/deployments.js';
 import { getDiscordPersonnelSpec } from './discord/resources/personnel.js';
 import { getDiscordPersonnelPrompt } from './discord/resources/prompts.js';
 import { getDiscordLocalToolsetSpec } from './discord/resources/toolsets.js';
+import { getDiscordDebateServiceSpecForGroup } from './discord/resources/debate.js';
 import {
   ResolvedAgentRuntimeSpec,
   ResolvedServiceDeployment,
@@ -136,6 +137,47 @@ function resolveAgentRuntime(
     toolsetIds: [...globalToolsetIds, ...personnel.localToolsetIds],
     flowIds,
     browserPolicy,
+  };
+}
+
+function buildSubAgentSystemPrompt(
+  parts: Array<string | null | undefined>,
+): string | undefined {
+  const resolved = parts.filter((part): part is string =>
+    Boolean(part && part.trim()),
+  );
+  return resolved.length > 0 ? resolved.join('\n\n') : undefined;
+}
+
+function resolveImportedDiscordSubAgent(spec: {
+  name: string;
+  sourcePersonnelId: string;
+  sourceDepartmentId: 'workshop' | 'planning' | 'secretary';
+  role: string;
+}): SubAgentConfig | null {
+  const runtime = resolveAgentRuntime(spec.sourcePersonnelId);
+  if (!runtime) return null;
+
+  const sourceDepartment = getDiscordDepartmentSpec(spec.sourceDepartmentId);
+  return {
+    name: spec.name,
+    backend: runtime.backend,
+    model: runtime.model,
+    apiKey: runtime.apiKey,
+    baseUrl: runtime.baseUrl,
+    role: spec.role || runtime.role,
+    allowedTools: runtime.allowedTools,
+    systemPrompt: buildSubAgentSystemPrompt([
+      runtime.capabilityPrompt,
+      runtime.personaPrompt,
+      [
+        `You are operating as an internal member of the Discord ${sourceDepartment.displayName} department.`,
+        'Preserve the source department perspective and quality bar.',
+        'Ignore room-facing speaker routing, workflow reporting, and other public-reply rules that do not matter for an internal debate worker.',
+      ].join('\n'),
+      'Participate only as an internal debate worker when invoked by the run_debate tool.',
+      'Do not use visible transcript markup or claim to be the user-facing speaker.',
+    ]),
   };
 }
 
@@ -278,6 +320,22 @@ export function shouldEnforceSingleSender(group: RegisteredGroup): boolean {
     deployment.personaMode === 'bot_only' &&
     Object.keys(deployment.senderBotMap).length > 0
   );
+}
+
+export function resolveGroupImportedSubAgents(
+  group: RegisteredGroup,
+): SubAgentConfig[] {
+  const deployment = getDiscordDeploymentForGroup(group);
+  if (!deployment) return [];
+
+  const debateSpec = getDiscordDebateServiceSpecForGroup(
+    deployment.canonicalGroupFolder,
+  );
+  if (!debateSpec) return [];
+
+  return debateSpec.importedAgents
+    .map((agent) => resolveImportedDiscordSubAgent(agent))
+    .filter((agent): agent is SubAgentConfig => agent !== null);
 }
 
 export function canStartWorkflowFromGroup(sourceGroup: string): boolean {

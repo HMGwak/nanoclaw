@@ -317,6 +317,75 @@ describe('WorkflowEngine', () => {
     expect(fs.existsSync(assigneeRunSnapshot)).toBe(true);
   });
 
+  it('requestWorkflow resolves assignee display names to registered folders', async () => {
+    const deps = createMockDeps();
+    const engine = new WorkflowEngine(deps);
+
+    const wf = await engine.requestWorkflow(
+      'Display Name Mapping',
+      [
+        {
+          step_index: 0,
+          assignee: '작업실',
+          goal: '폴더 매핑 확인',
+        },
+      ],
+      'discord_planning',
+      'dc:1234:planning',
+      'karpathy-loop',
+    );
+
+    const steps = getWorkflowSteps(wf.id);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].assignee_group_folder).toBe('discord_workshop');
+  });
+
+  it('requestWorkflow resolves compact department aliases when unambiguous', async () => {
+    const deps = createMockDeps();
+    const engine = new WorkflowEngine(deps);
+
+    const wf = await engine.requestWorkflow(
+      'Compact Alias Mapping',
+      [
+        {
+          step_index: 0,
+          assignee: '기획',
+          goal: '축약어 매핑 확인',
+        },
+      ],
+      'discord_planning',
+      'dc:1234:planning',
+      'karpathy-loop',
+    );
+
+    const steps = getWorkflowSteps(wf.id);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].assignee_group_folder).toBe('discord_planning');
+  });
+
+  it('requestWorkflow resolves slash-separated assignee aliases when one target matches', async () => {
+    const deps = createMockDeps();
+    const engine = new WorkflowEngine(deps);
+
+    const wf = await engine.requestWorkflow(
+      'Compound Alias Mapping',
+      [
+        {
+          step_index: 0,
+          assignee: '기획/개발',
+          goal: '복합 축약어 매핑 확인',
+        },
+      ],
+      'discord_planning',
+      'dc:1234:planning',
+      'karpathy-loop',
+    );
+
+    const steps = getWorkflowSteps(wf.id);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].assignee_group_folder).toBe('discord_planning');
+  });
+
   it('confirmWorkflow starts first step', async () => {
     const deps = createMockDeps();
     const engine = new WorkflowEngine(deps);
@@ -349,6 +418,36 @@ describe('WorkflowEngine', () => {
     expect(steps[0].status).toBe('claimed');
     expect(steps[0].claimed_at).toBeTruthy();
     expect(steps[0].lease_expires_at).toBeTruthy();
+  });
+
+  it('autoStart starts workflow immediately and posts progress updates', async () => {
+    const deps = createMockDeps();
+    const engine = new WorkflowEngine(deps);
+
+    const wf = await engine.requestWorkflow(
+      'Auto Start',
+      [
+        {
+          step_index: 0,
+          assignee: 'discord_workshop',
+          goal: 'Build immediately',
+          stage_id: 'change',
+        },
+      ],
+      'discord_planning',
+      'dc:1234:planning',
+      'karpathy-loop',
+      { autoStart: true },
+    );
+
+    expect(getWorkflow(wf.id)!.status).toBe('running');
+    expect(deps.enqueuedSteps).toHaveLength(1);
+    expect(
+      deps.sentMessages.some((m) => m.text.includes('워크플로우 시작')),
+    ).toBe(true);
+    expect(
+      deps.sentMessages.some((m) => m.text.includes('진행: Step 1/1 시작')),
+    ).toBe(true);
   });
 
   it('onStepCompleted advances to next step', async () => {

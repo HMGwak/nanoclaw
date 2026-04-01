@@ -30,6 +30,7 @@ import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup, SubAgentConfig } from './types.js';
 import { buildGroupAgentTeam } from './agents/index.js';
+import { parseDebateIntent } from './catalog/methods/debate/index.js';
 import { resolveServiceDeployment } from './services/index.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL });
@@ -78,6 +79,7 @@ interface VolumeMount {
 
 function buildServiceInstructionLayers(
   group: RegisteredGroup,
+  prompt: string,
 ): Array<{ id: string; content: string }> {
   const deployment = resolveServiceDeployment(group);
   if (!deployment) return [];
@@ -99,6 +101,29 @@ function buildServiceInstructionLayers(
     layers.push({
       id: `service-department:${deployment.departmentId}`,
       content: deployment.departmentPrompt,
+    });
+  }
+  const debateIntent = parseDebateIntent(prompt);
+  if (deployment.departmentId === 'planning' && debateIntent.isDebateIntent) {
+    const modeHint = debateIntent.modeHint || 'standard';
+    const roundsHint = debateIntent.roundsHint
+      ? `Rounds hint: ${debateIntent.roundsHint}`
+      : null;
+    layers.push({
+      id: `service-debate-intent:${deployment.id}`,
+      content: [
+        '## Debate Intent',
+        '',
+        'Debate keyword detected in the latest user message.',
+        'Treat this as an explicit trigger to call `run_debate` unless the user explicitly says not to.',
+        'Before calling `run_debate`, gather objective evidence with `web_search`, `cloudflare_fetch`, `web_fetch`, or relevant local materials.',
+        'Pass that evidence through `evidence_packs`; do not rely on model prior knowledge alone.',
+        `Topic: ${debateIntent.topic || prompt.trim()}`,
+        `Mode hint: ${modeHint}`,
+        roundsHint,
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join('\n'),
     });
   }
   const rosterLines = [
@@ -560,7 +585,10 @@ export async function runContainerAgent(
 
     // Resolve sub-agent credentials and include in container input
     const containerInput = { ...input };
-    const instructionLayers = buildServiceInstructionLayers(group);
+    const instructionLayers = buildServiceInstructionLayers(
+      group,
+      input.prompt,
+    );
     if (instructionLayers.length > 0) {
       containerInput.instructionLayers = instructionLayers;
       logger.info(
@@ -572,12 +600,12 @@ export async function runContainerAgent(
       );
     }
     const groupTeam = buildGroupAgentTeam(group);
-    if (groupTeam.teammateConfigs.length > 0) {
+    if (groupTeam.delegateConfigs.length > 0) {
       containerInput.subAgents = resolveSubAgentCredentials(
-        groupTeam.teammateConfigs,
+        groupTeam.delegateConfigs,
       );
       logger.info(
-        { group: group!.name, count: groupTeam.teammateConfigs.length },
+        { group: group!.name, count: groupTeam.delegateConfigs.length },
         'Passing sub-agents to container',
       );
     }

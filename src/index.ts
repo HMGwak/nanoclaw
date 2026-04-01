@@ -75,6 +75,7 @@ import { normalizeAgentOutputs } from './agent-output.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
+import { enforceContainerOnlyRuntime } from './runtime-mode.js';
 import { WorkflowEngine } from './workflows/engine.js';
 import { WorkflowStepContext } from './workflows/types.js';
 import { SCHEDULER_POLL_INTERVAL } from './config.js';
@@ -649,6 +650,7 @@ function ensureContainerSystemRunning(): void {
 }
 
 async function main(): Promise<void> {
+  enforceContainerOnlyRuntime();
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
@@ -834,7 +836,9 @@ async function main(): Promise<void> {
     onWorkflowRequested: (title, steps, flowId, sourceGroup, chatJid) => {
       if (workflowEngine) {
         workflowEngine
-          .requestWorkflow(title, steps, sourceGroup, chatJid, flowId)
+          .requestWorkflow(title, steps, sourceGroup, chatJid, flowId, {
+            autoStart: true,
+          })
           .catch(async (err) => {
             logger.error({ err, title }, 'Failed to create workflow');
             if (!chatJid) return;

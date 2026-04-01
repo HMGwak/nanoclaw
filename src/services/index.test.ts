@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   canStartWorkflowFromGroup,
   resolveGroupLeadSender,
+  resolveGroupImportedSubAgents,
   resolveGroupPersonaBotLabel,
   resolveGroupPersonaMode,
   resolveGroupTargetSender,
@@ -39,10 +40,14 @@ describe('service deployment resolution', () => {
     );
     expect(deployment?.personnel.map((agent) => agent.displayName)).toEqual([
       '작업실 팀장',
+      '키미',
     ]);
-    expect(deployment?.teammates.map((agent) => agent.displayName)).toEqual([]);
+    expect(deployment?.teammates.map((agent) => agent.displayName)).toEqual([
+      '키미',
+    ]);
     expect(deployment?.senderBotMap).toEqual({
       '작업실 팀장': 'workshop',
+      키미: 'kimi',
     });
     expect(deployment?.botLabel).toBe('workshop');
     expect(deployment?.canonicalGroupFolder).toBe('discord_workshop_teamlead');
@@ -64,7 +69,7 @@ describe('service deployment resolution', () => {
     ).toBe('작업실 팀장');
     expect(
       resolveGroupTargetSender(workshopGroup, 'dc:1487329723443839109:kimi'),
-    ).toBe('작업실 팀장');
+    ).toBe('키미');
     expect(shouldEnforceSingleSender(workshopGroup)).toBe(true);
 
     const kimiGroup: RegisteredGroup = {
@@ -101,7 +106,9 @@ describe('service deployment resolution', () => {
     const deployment = resolveServiceDeployment(overriddenGroup);
 
     expect(deployment?.lead?.displayName).toBe('작업실 팀장');
-    expect(deployment?.teammates.map((agent) => agent.displayName)).toEqual([]);
+    expect(deployment?.teammates.map((agent) => agent.displayName)).toEqual([
+      '키미',
+    ]);
     expect(resolveGroupLeadSender(overriddenGroup)).toBe('작업실 팀장');
     expect(resolveGroupPersonaMode(overriddenGroup)).toBe('bot_only');
     expect(resolveGroupPersonaBotLabel(overriddenGroup, '작업실 팀장')).toBe(
@@ -131,15 +138,13 @@ describe('service deployment resolution', () => {
       'global_browser_research',
     );
     expect(planningDeployment?.leadPrompt).toContain(
-      'workflow-first coordinator',
+      'planning-led debate coordinator',
     );
-    expect(planningDeployment?.leadPrompt).toContain('confirms user intent');
+    expect(planningDeployment?.leadPrompt).toContain('run_debate');
     expect(planningDeployment?.departmentPrompt).toContain(
       'Discord Planning Department',
     );
-    expect(planningDeployment?.departmentPrompt).toContain(
-      'Use workflow-first routing by default',
-    );
+    expect(planningDeployment?.departmentPrompt).toContain('run_debate');
     expect(secretaryDeployment?.leadPrompt).toContain('비서실');
     expect(secretaryDeployment?.leadPrompt).toContain('concise and composed');
     expect(secretaryDeployment?.lead?.toolsetIds).toContain(
@@ -153,13 +158,41 @@ describe('service deployment resolution', () => {
     );
   });
 
-  it('uses deployment-level workflow start authorization', () => {
-    expect(canStartWorkflowFromGroup('discord_planning')).toBe(true);
-    expect(canStartWorkflowFromGroup('discord_planning_bot')).toBe(true);
+  it('disables workflow start authorization for discord after the debate-first refactor', () => {
+    expect(canStartWorkflowFromGroup('discord_planning')).toBe(false);
+    expect(canStartWorkflowFromGroup('discord_planning_bot')).toBe(false);
     expect(canStartWorkflowFromGroup('discord_workshop')).toBe(false);
     expect(canStartWorkflowFromGroup('discord_workshop_teamlead')).toBe(false);
     expect(canStartWorkflowFromGroup('discord_secretary')).toBe(false);
     expect(canStartWorkflowFromGroup('any-group')).toBe(false);
+  });
+
+  it('imports hidden debate sub-agents for planning without changing visible speakers', () => {
+    const planningGroup: RegisteredGroup = {
+      name: '기획실',
+      folder: 'discord_planning',
+      trigger: '@기획실',
+      added_at: '2026-01-01T00:00:00Z',
+    };
+
+    const imported = resolveGroupImportedSubAgents(planningGroup);
+    expect(imported.map((agent) => agent.name)).toEqual([
+      '기획실 판정관',
+      '작업실 팀장',
+      '키미',
+    ]);
+    expect(imported[0]?.systemPrompt).toContain(
+      'internal member of the Discord 기획실 department',
+    );
+    expect(imported[1]?.systemPrompt).toContain(
+      'internal member of the Discord 작업실 department',
+    );
+    expect(imported[2]?.systemPrompt).toContain(
+      'internal member of the Discord 작업실 department',
+    );
+    expect(imported[1]?.systemPrompt).not.toContain(
+      '## Workshop Collaboration',
+    );
   });
 
   it('injects browser policy required tools into legacy group allowlist overrides', () => {

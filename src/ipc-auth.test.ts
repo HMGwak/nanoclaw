@@ -683,7 +683,7 @@ describe('register_group success', () => {
 // --- workflow IPC authorization and routing ---
 
 describe('workflow IPC handlers', () => {
-  it('planning group can start workflow', async () => {
+  it('planning group can no longer start workflow after the debate-first refactor', async () => {
     const onWorkflowRequested = vi.fn();
     await processTaskIpc(
       {
@@ -708,23 +708,11 @@ describe('workflow IPC handlers', () => {
       },
     );
 
-    expect(onWorkflowRequested).toHaveBeenCalledWith(
-      'Build feature',
-      [
-        {
-          step_index: 0,
-          assignee: 'third-group',
-          goal: 'Implement',
-          acceptance_criteria: ['tests pass'],
-          constraints: ['no regressions'],
-          stage_id: 'change',
-        },
-      ],
-      'karpathy-loop',
-      'discord_planning',
+    expect(onWorkflowRequested).not.toHaveBeenCalled();
+    expect(sendMessageMock).toHaveBeenCalledWith(
       'other@g.us',
+      expect.stringContaining('워크플로우 시작 실패'),
     );
-    expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
   it('non-planning non-main group cannot start workflow', async () => {

@@ -20,6 +20,77 @@ import {
 } from './memory.js';
 import { WorkflowEngineDeps } from './types.js';
 
+function normalizeKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, '');
+}
+
+function resolveAssigneeFolder(
+  assignee: string,
+  groups: ReturnType<WorkflowEngineDeps['registeredGroups']>,
+): string | null {
+  const resolveOne = (value: string): string | null => {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    const direct = Object.values(groups).find(
+      (group) => group.folder === trimmed,
+    );
+    if (direct) return direct.folder;
+
+    const jidMatch = groups[trimmed];
+    if (jidMatch) return jidMatch.folder;
+
+    const target = normalizeKey(trimmed);
+
+    const folderCandidates = Object.values(groups).filter(
+      (group) => normalizeKey(group.folder) === target,
+    );
+    if (folderCandidates.length === 1) return folderCandidates[0].folder;
+
+    const nameCandidates = Object.values(groups).filter(
+      (group) => normalizeKey(group.name) === target,
+    );
+    if (nameCandidates.length === 1) return nameCandidates[0].folder;
+
+    // Accept compact aliases like "기획" -> "기획실", while rejecting ambiguous matches.
+    const containsByName = Object.values(groups).filter((group) => {
+      const key = normalizeKey(group.name);
+      return key.includes(target) || target.includes(key);
+    });
+    if (containsByName.length === 1) return containsByName[0].folder;
+
+    const containsByFolder = Object.values(groups).filter((group) => {
+      const key = normalizeKey(group.folder);
+      return key.includes(target) || target.includes(key);
+    });
+    if (containsByFolder.length === 1) return containsByFolder[0].folder;
+
+    return null;
+  };
+
+  const trimmed = assignee.trim();
+  if (!trimmed) return null;
+
+  const directMatch = resolveOne(trimmed);
+  if (directMatch) return directMatch;
+
+  // Handle mixed labels like "기획/개발" by resolving each segment.
+  const segments = trimmed
+    .split(/[\/,|&>]+/)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+  if (segments.length <= 1) return null;
+
+  const resolved = new Set<string>();
+  for (const segment of segments) {
+    const folder = resolveOne(segment);
+    if (folder) resolved.add(folder);
+  }
+  if (resolved.size === 1) return [...resolved][0];
+
+  return null;
+}
+
 export class WorkflowEngine {
   private deps: WorkflowEngineDeps;
   private repository;
@@ -43,28 +114,34 @@ export class WorkflowEngine {
     sourceGroupFolder: string,
     sourceChatJid: string,
     flowId?: string,
+    options?: { autoStart?: boolean },
   ): Promise<WorkflowRun> {
     const groups = this.deps.registeredGroups();
-    for (const step of planSteps) {
-      const found = Object.entries(groups).find(
-        ([, group]) => group.folder === step.assignee,
-      );
-      if (!found) {
+    const normalizedSteps = planSteps.map((step) => {
+      const assigneeFolder = resolveAssigneeFolder(step.assignee, groups);
+      if (!assigneeFolder) {
+        const allowed = Object.values(groups)
+          .map((group) => `${group.name} (${group.folder})`)
+          .join(', ');
         throw new Error(
-          `Assignee group "${step.assignee}" not found in registered groups`,
+          `Assignee group "${step.assignee}" not found in registered groups. Allowed assignees: ${allowed}`,
         );
       }
-    }
+      return {
+        ...step,
+        assignee: assigneeFolder,
+      };
+    });
 
     const workflow = this.repository.createWorkflow({
       title,
       sourceGroupFolder,
       sourceChatJid,
-      planSteps,
+      planSteps: normalizedSteps,
       flowId,
     });
 
-    for (const step of planSteps) {
+    for (const step of normalizedSteps) {
       const assigneeJid = Object.entries(groups).find(
         ([, group]) => group.folder === step.assignee,
       )![0];
@@ -81,14 +158,40 @@ export class WorkflowEngine {
       });
     }
 
+    const stepSummary = normalizedSteps
+      .map((step, index) => `  ${index + 1}. [${step.assignee}] ${step.goal}`)
+      .join('\n');
+    const autoStart = options?.autoStart === true;
+
+    if (autoStart) {
+      this.repository.updateWorkflow(workflow.id, { status: 'running' });
+      await this.deps.sendMessage(
+        sourceChatJid,
+        `**워크플로우 시작: ${title}**\n\n` +
+          `**단계:**\n${stepSummary}\n\n` +
+          `워크플로우 ID: \`${workflow.id}\`\n` +
+          `진행 상황을 단계별로 공유합니다.`,
+      );
+      writePendingWorkflowSnapshot(this.repository, workflow.id);
+
+      logger.info(
+        {
+          workflowId: workflow.id,
+          flowId: flowId || null,
+          title,
+          steps: normalizedSteps.length,
+          autoStart: true,
+        },
+        'Workflow requested and auto-started',
+      );
+
+      await this.startNextStep(workflow.id);
+      return this.repository.getWorkflow(workflow.id)!;
+    }
+
     this.repository.updateWorkflow(workflow.id, {
       status: 'awaiting_confirmation',
     });
-
-    const stepSummary = planSteps
-      .map((step, index) => `  ${index + 1}. [${step.assignee}] ${step.goal}`)
-      .join('\n');
-
     await this.deps.sendMessage(
       sourceChatJid,
       `**워크플로우 요청: ${title}**\n\n` +
@@ -96,7 +199,6 @@ export class WorkflowEngine {
         `이 워크플로우를 실행할까요? ("확인" 또는 "취소"로 응답해주세요)\n` +
         `워크플로우 ID: \`${workflow.id}\``,
     );
-
     writePendingWorkflowSnapshot(this.repository, workflow.id);
 
     logger.info(
@@ -104,7 +206,7 @@ export class WorkflowEngine {
         workflowId: workflow.id,
         flowId: flowId || null,
         title,
-        steps: planSteps.length,
+        steps: normalizedSteps.length,
       },
       'Workflow requested, awaiting confirmation',
     );
@@ -237,6 +339,15 @@ export class WorkflowEngine {
     const nextStep = steps.find(
       (candidate) => candidate.step_index === nextStepIndex,
     );
+    const summary =
+      resultSummary.length > 240
+        ? `${resultSummary.slice(0, 240)}...`
+        : resultSummary;
+    await this.deps.sendMessage(
+      workflow.source_chat_jid,
+      `워크플로우 **${workflow.title}** 진행: Step ${step.step_index + 1}/${steps.length} 완료\n` +
+        `요약: ${summary}`,
+    );
 
     if (nextStep) {
       this.repository.updateWorkflow(workflowId, {
@@ -299,6 +410,13 @@ export class WorkflowEngine {
       logger.info(
         { workflowId, stepIndex, retry: newRetryCount },
         'Retrying failed step',
+      );
+      const summary = error.length > 240 ? `${error.slice(0, 240)}...` : error;
+      await this.deps.sendMessage(
+        workflow.source_chat_jid,
+        `워크플로우 **${workflow.title}** 진행: Step ${step.step_index + 1}/${steps.length} 실패\n` +
+          `재시도: ${newRetryCount}/${step.max_retries}\n` +
+          `오류: ${summary}`,
       );
 
       await this.startStep(
@@ -470,6 +588,17 @@ export class WorkflowEngine {
       step.id,
       prompt,
       context,
+    );
+    const steps = this.repository.getWorkflowSteps(workflowId);
+    const retryInfo =
+      step.retry_count > 0
+        ? ` (재시도 ${step.retry_count}/${step.max_retries})`
+        : '';
+    await this.deps.sendMessage(
+      workflow.source_chat_jid,
+      `워크플로우 **${workflow.title}** 진행: Step ${step.step_index + 1}/${steps.length} 시작${retryInfo}\n` +
+        `담당: ${step.assignee_group_folder}\n` +
+        `목표: ${step.goal}`,
     );
 
     logger.info(
