@@ -92,18 +92,19 @@ EOF
 필요하면 `AGENT_BACKEND=openai|opencode|zai|openai-compat|claude`를 명시한다.
 Claude Code 기반 온보딩을 선호하면 `claude`를 실행한 뒤 `/setup`을 써도 된다.
 
-### 서비스 관리
+### 런타임 관리 (Docker-only)
 
 ```bash
-# macOS (launchd)
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # restart
+# 본체 시작/중지/로그
+./scripts/docker-up.sh
+./scripts/docker-down.sh
+./scripts/docker-logs.sh
 
-# Linux (systemd)
-systemctl --user start nanoclaw
-systemctl --user stop nanoclaw
-systemctl --user restart nanoclaw
+# Docker 데몬 상태 확인
+docker info
+
+# NanoClaw 관련 컨테이너 확인
+docker ps --filter name=nanoclaw
 ```
 
 컨테이너 이미지: Node.js 24, Chromium, agent-runner 포함.
@@ -114,7 +115,7 @@ systemctl --user restart nanoclaw
 
 > 원문: https://docs.nanoclaw.dev/quickstart
 
-Claude Code를 쓰는 경우 `/setup` 명령이 모든 것을 처리한다. 수동 구성 시에는 `.env`에 백엔드 키를 넣고 서비스만 따로 구성하면 된다.
+Claude Code를 쓰는 경우 `/setup` 명령이 모든 것을 처리한다. 수동 구성 시에는 `.env`에 백엔드 키를 넣고 Docker 런타임만 확인하면 된다.
 
 1. 의존성 확인 (Node.js 20+)
 2. 컨테이너 런타임 설정 (Docker 또는 Apple Container)
@@ -779,10 +780,6 @@ SQLite 테이블: `chats`, `messages`, `registered_groups`, `sessions`, `schedul
 ### 진단 명령
 
 ```bash
-# 서비스 상태
-launchctl list | grep nanoclaw     # macOS
-systemctl --user status nanoclaw   # Linux
-
 # 컨테이너 상태
 docker ps --filter name=nanoclaw
 
@@ -794,7 +791,7 @@ ls -lt groups/*/logs/ | head -20
 
 - **에이전트 응답 없음**: 트리거 워드 확인, Docker 실행 중인지, 동시성 제한 초과 여부
 - **컨테이너 타임아웃**: exit code 137, 타임아웃 값 증가, 무한 루프 확인
-- **WhatsApp 인증**: `/add-whatsapp` 재실행, 서비스 재시작
+- **WhatsApp 인증**: `/add-whatsapp` 재실행, Docker 재기동
 - **마운트 오류**: 허용목록 설정, 심볼릭 링크 해석, 권한 확인
 - **IPC 문제**: 비메인 그룹 메시지 접근 제한, JSON 유효성 검사
 

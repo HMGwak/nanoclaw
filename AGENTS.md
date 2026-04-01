@@ -134,19 +134,12 @@ npm run build        # Compile TypeScript
 ./container/build.sh # Rebuild agent container
 ```
 
-Service management:
+Runtime policy:
 
-```bash
-# macOS (launchd)
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # restart
-
-# Linux (systemd)
-systemctl --user start nanoclaw
-systemctl --user stop nanoclaw
-systemctl --user restart nanoclaw
-```
+- Run NanoClaw in Docker only.
+- Do not use `launchd`, `systemd`, `tmux`, `nohup`, or ad-hoc host `npm start`.
+- Host execution is blocked by default in `src/index.ts` unless explicitly overridden with `NANOCLAW_ALLOW_HOST_RUNTIME=1`.
+- Use `./scripts/docker-up.sh` to start, `./scripts/docker-down.sh` to stop, `./scripts/docker-logs.sh` for logs.
 
 ## Troubleshooting
 
