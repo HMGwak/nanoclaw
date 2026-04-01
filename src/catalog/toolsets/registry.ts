@@ -7,6 +7,20 @@ const TOOLSETS: Record<string, ToolsetSpec> = {
     allowedTools: null,
     skillIds: ['agent-browser'],
   },
+  obsidian_vault_tools: {
+    id: 'obsidian_vault_tools',
+    description:
+      'Obsidian vault tools for creating and editing Markdown notes, Bases, Canvas files, and CLI interaction.',
+    allowedTools: null,
+    skillIds: [
+      'obsidian-markdown',
+      'obsidian-bases',
+      'obsidian-canvas',
+      'obsidian-cli',
+      'defuddle',
+    ],
+    sourceModuleIds: ['obsidian_skills'],
+  },
   global_browser_research: {
     id: 'global_browser_research',
     description:

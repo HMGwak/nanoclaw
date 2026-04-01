@@ -30,7 +30,7 @@ const LOCAL_TOOLSETS: Record<string, DiscordLocalToolsetSpec> = {
   discord_secretary_lead_local: {
     id: 'discord_secretary_lead_local',
     description: 'Discord secretary lead local extensions.',
-    importedGlobalToolsetIds: ['global_general_cli', 'global_browser_research'],
+    importedGlobalToolsetIds: ['global_general_cli', 'global_browser_research', 'obsidian_vault_tools'],
   },
 };
 
