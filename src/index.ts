@@ -233,6 +233,17 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
     return;
   }
 
+  // Merge config.json from group folder into containerConfig (file-based overrides)
+  const groupConfigFile = path.join(groupDir, 'config.json');
+  if (fs.existsSync(groupConfigFile)) {
+    try {
+      const fileConfig = JSON.parse(fs.readFileSync(groupConfigFile, 'utf-8'));
+      group = { ...group, containerConfig: { ...group.containerConfig, ...fileConfig } };
+    } catch (err) {
+      logger.warn({ folder: group.folder, err }, 'Failed to parse group config.json');
+    }
+  }
+
   registeredGroups[jid] = group;
   setRegisteredGroup(jid, group);
 

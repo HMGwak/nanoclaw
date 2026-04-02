@@ -73,6 +73,21 @@ else
 fi
 
 echo "[6/6] Starting core container (${CORE_CONTAINER})"
+
+# Auto-mount allowedRoots from mount-allowlist.json so the core container
+# can validate and pass them through to agent containers.
+EXTRA_MOUNT_ARGS=()
+ALLOWLIST_FILE="${HOST_CONFIG_DIR}/mount-allowlist.json"
+if [[ -f "${ALLOWLIST_FILE}" ]] && command -v jq >/dev/null 2>&1; then
+  while IFS= read -r mount_path; do
+    # Expand ~ to real home
+    expanded="${mount_path/#\~/${HOME}}"
+    if [[ -d "${expanded}" ]]; then
+      EXTRA_MOUNT_ARGS+=(-v "${expanded}:${expanded}")
+    fi
+  done < <(jq -r '.allowedRoots[].path' "${ALLOWLIST_FILE}" 2>/dev/null)
+fi
+
 docker run -d \
   --name "${CORE_CONTAINER}" \
   --restart unless-stopped \
@@ -85,6 +100,7 @@ docker run -d \
   -v "${CORE_NODE_MODULES_VOLUME}:${PROJECT_ROOT}/node_modules" \
   -v "${CORE_NPM_CACHE_VOLUME}:${CONTAINER_HOME}/.npm" \
   -v "${HOST_CONFIG_DIR}:${CONTAINER_HOME}/.config/nanoclaw" \
+  "${EXTRA_MOUNT_ARGS[@]}" \
   -w "${PROJECT_ROOT}" \
   "${ENV_ARGS[@]}" \
   --entrypoint /bin/sh \
