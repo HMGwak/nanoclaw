@@ -15,6 +15,21 @@ import json
 import logging
 from pathlib import Path
 
+from pydantic import BaseModel
+
+try:
+    from .json_utils import try_parse_validated
+except ImportError:
+    from json_utils import try_parse_validated
+
+
+class MapExtraction(BaseModel):
+    반복_입력자료: list[str] = []
+    반복_산출물: list[str] = []
+    절차_단계: list[str] = []
+    사례별_특이점: list[dict] = []
+    주요_키워드: list[str] = []
+
 logger = logging.getLogger(__name__)
 
 
@@ -159,22 +174,21 @@ class ChunkedSynthesizer:
 
     def _parse_map_response(self, response: str, batch: list[Path]) -> dict:
         """Parse LLM JSON response; fall back to empty structure on error."""
-        try:
-            text = _extract_json_from_text(response)
-            data = json.loads(text)
-            # Inject source filenames for traceability
-            data.setdefault("_sources", [p.name for p in batch])
+        sources = [p.name for p in batch]
+        extraction = try_parse_validated(response, MapExtraction)
+        if extraction:
+            data = extraction.model_dump()
+            data["_sources"] = sources
             return data
-        except (json.JSONDecodeError, ValueError) as exc:
-            logger.warning("Map response parse failed (%s), using empty extraction", exc)
+        else:
+            logger.warning("Map response parse failed, using empty extraction")
             return {
                 "반복_입력자료": [],
                 "반복_산출물": [],
                 "절차_단계": [],
                 "사례별_특이점": [],
                 "주요_키워드": [],
-                "_sources": [p.name for p in batch],
-                "_parse_error": str(exc),
+                "_sources": sources,
             }
 
     # ── Reduce phase ──────────────────────────────────────────────
@@ -248,15 +262,3 @@ def _format_extractions(extractions: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-def _extract_json_from_text(text: str) -> str:
-    """Extract JSON object/array from LLM response text."""
-    import re
-
-    m = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
-    if m:
-        return m.group(1).strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        return text[start : end + 1]
-    return text

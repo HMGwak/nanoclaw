@@ -7,11 +7,31 @@ import logging
 import os
 import shlex
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
 
 import openai
+from pydantic import BaseModel
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tasks" / "wiki"))
+try:
+    from json_utils import extract_json, parse_validated
+except ImportError:
+    extract_json = None  # type: ignore[assignment]
+    parse_validated = None  # type: ignore[assignment]
+
+
+class RubricItemScore(BaseModel):
+    score: float
+    rationale: str
+    improvements: list[str] = []
+
+
+class RubricScores(BaseModel):
+    scores: dict[str, RubricItemScore]
+
 
 try:
     from catalog.sdk_profiles.chatgpt_oauth import ChatGPTClient
@@ -107,12 +127,19 @@ class OpenAIAgents:
         for attempt in range(3):
             raw = self.generate(system_prompt, eval_prompt)
             try:
-                parsed = json.loads(_extract_json(raw))
-                scores = {
-                    k: ItemScore(**v) for k, v in parsed["scores"].items()
-                }
+                if parse_validated is not None:
+                    result = parse_validated(raw, RubricScores)
+                    scores = {
+                        k: ItemScore(score=v.score, rationale=v.rationale, improvements=v.improvements)
+                        for k, v in result.scores.items()
+                    }
+                else:
+                    parsed = json.loads(_extract_json(raw))
+                    scores = {
+                        k: ItemScore(**v) for k, v in parsed["scores"].items()
+                    }
                 return EvalResult(scores=scores, raw_response=raw)
-            except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
                 last_error = exc
                 logger.warning(
                     "evaluate() JSON parse failed (attempt %d/3): %s",

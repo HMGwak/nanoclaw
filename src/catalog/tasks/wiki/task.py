@@ -8,7 +8,6 @@ agent generates and revises.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
@@ -18,15 +17,33 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import openai
+from pydantic import BaseModel
+from typing import Literal
 
 try:
     from .base_index import BaseIndexParser
     from .synthesizer import ChunkedSynthesizer
     from .wiki_tracker import WikiTracker
+    from .json_utils import extract_json, parse_validated, parse_validated_list, try_parse_validated
 except ImportError:
     from base_index import BaseIndexParser  # type: ignore[no-redef]
     from synthesizer import ChunkedSynthesizer  # type: ignore[no-redef]
     from wiki_tracker import WikiTracker  # type: ignore[no-redef]
+    from json_utils import extract_json, parse_validated, parse_validated_list, try_parse_validated  # type: ignore[no-redef]
+
+
+class WikiMatchDecision(BaseModel):
+    action: Literal["create", "update"]
+    target_wiki: str | None = None
+    title: str
+
+
+class SectionEdit(BaseModel):
+    action: Literal["replace_section", "append_to", "add_section"]
+    heading_path: str | None = None
+    parent_heading_path: str | None = None
+    new_heading: str | None = None
+    content: str
 
 
 @dataclass
@@ -350,9 +367,10 @@ class WikiTask:
                 user_prompt=f"문서:\n{doc_text}\n\nwiki 목록:\n{wiki_index}",
             )
 
-            try:
-                match = json.loads(_extract_json_from_text(match_raw))
-            except (json.JSONDecodeError, ValueError):
+            match_result = try_parse_validated(match_raw, WikiMatchDecision)
+            if match_result:
+                match = {"action": match_result.action, "target_wiki": match_result.target_wiki, "title": match_result.title}
+            else:
                 logger.warning("Match response parse failed, defaulting to create")
                 match = {"action": "create", "title": doc_path.stem}
 
@@ -435,41 +453,40 @@ class WikiTask:
     def _apply_section_diffs(self, original: str, response: str) -> str:
         """Apply section-based edits from LLM JSON response."""
         try:
-            edits = json.loads(_extract_json_from_text(response))
-        except (json.JSONDecodeError, ValueError):
+            edits = parse_validated_list(response, SectionEdit)
+        except ValueError:
             logger.warning("Section diff parse failed, keeping original")
             return original
 
-        if not isinstance(edits, list):
-            logger.warning("Section diff response is not a list")
+        if not edits:
+            logger.warning("Section diff response is not a list or is empty")
             return original
 
         editor = MarkdownSectionEditor(original)
         applied = 0
         for i, edit in enumerate(edits):
-            action = edit.get("action")
             success = False
-            
-            if action == "replace_section":
+
+            if edit.action == "replace_section":
                 success = editor.replace_section(
-                    edit.get("heading_path", ""), edit.get("content", "")
+                    edit.heading_path or "", edit.content
                 )
-            elif action == "append_to":
+            elif edit.action == "append_to":
                 success = editor.append_to_section(
-                    edit.get("heading_path", ""), edit.get("content", "")
+                    edit.heading_path or "", edit.content
                 )
-            elif action == "add_section":
+            elif edit.action == "add_section":
                 success = editor.add_section(
-                    edit.get("parent_heading_path", ""),
-                    edit.get("new_heading", ""),
-                    edit.get("content", ""),
+                    edit.parent_heading_path or "",
+                    edit.new_heading or "",
+                    edit.content,
                 )
-            
+
             if success:
                 applied += 1
             else:
-                logger.warning("Edit #%d (%s) failed for path: %s", 
-                               i, action, edit.get("heading_path") or edit.get("parent_heading_path"))
+                logger.warning("Edit #%d (%s) failed for path: %s",
+                               i, edit.action, edit.heading_path or edit.parent_heading_path)
 
         logger.info("Applied %d/%d section edits", applied, len(edits))
         return editor.get_content() if applied > 0 else original
@@ -527,17 +544,3 @@ class WikiTask:
                     lines.append(f"### {ref.name}\n(읽기 실패)\n")
 
         return "\n".join(lines)
-
-
-def _extract_json_from_text(text: str) -> str:
-    """Extract JSON from LLM response text."""
-    import re
-
-    m = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
-    if m:
-        return m.group(1).strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        return text[start : end + 1]
-    return text
