@@ -738,12 +738,52 @@ def main():
     )
 
     parser = argparse.ArgumentParser(
-        description="Quality Loop Engine - evaluate, revise, repeat"
+        description="""Quality Loop Engine (카파시 루프) — rubric 기반 판정 루프 엔진.
+
+task의 실행 결과를 rubric으로 평가하여 keep/revise/discard를 반복 판정한다.
+판정 흐름: task.run() → evaluate(rubric) → verdict → task.revise(feedback) → 반복
+
+판정 기준:
+  keep:           score >= keep_threshold AND hard gate 모두 통과
+  discard:        score < discard_threshold (iteration > 1)
+  converged:      0 <= delta < convergence_delta (점수 변화 미미)
+  max_iterations: 최대 반복 횟수 도달
+  revise:         위 조건 불충족 → 피드백 반영 후 재시도
+
+사용 예시:
+  # 1:1 legacy 모드 (파일별 wiki 생성)
+  python engine.py --task wiki_task.WikiTask \\
+    --rubric rubric.md --input "*.md" --output /tmp/out
+
+  # N:1 synthesis 모드 (도메인별 wiki 합성)
+  python engine.py --task task.WikiTask \\
+    --rubric rubrics/rubric_안전성검토.md \\
+    --input "dummy" --output /tmp/out \\
+    --domain 안전성검토 \\
+    --vault-root ~/Documents/Mywork \\
+    --base "3. Resource/LLM Knowledge Base/index/안전성검토.base" \\
+    --filter "(안전성검토)_*.md"
+
+  # 로컬 Gemma4 모델 사용 (wiki 생성만, 평가는 gpt-5.4)
+  python engine.py --task task.WikiTask \\
+    --rubric rubrics/rubric_안전성검토.md \\
+    --input "dummy" --output /tmp/out \\
+    --domain 안전성검토 --model gemma4-e4b
+
+출력 구조:
+  output_dir/
+  ├── iter_1/          # 1차 실행 결과
+  ├── iter_2/          # 2차 revise 결과
+  ├── final/           # keep/converged 시 최종 복사
+  ├── .discarded/      # discard 시 이동
+  └── report.json      # LoopReport (status, scores, history)
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--task",
         required=True,
-        help="Task class in 'module.ClassName' format (e.g. wiki_task.WikiTask)",
+        help="Task class (module.ClassName). run(context)→RunResult, revise(context,feedback)→RunResult. 예: task.WikiTask, test_random_task.RandomTask",
     )
     parser.add_argument(
         "--rubric",
@@ -772,29 +812,29 @@ def main():
     parser.add_argument(
         "--model",
         default="gpt-5.4",
-        help="LLM model to use (default: gpt-5.4)",
+        help="LLM model. 기본: gpt-5.4 (ChatGPT OAuth). 로컬: gemma4-26b, gemma4-e4b. 평가(reviewer)는 항상 gpt-5.4.",
     )
     parser.add_argument(
         "--domain",
         default=None,
-        help="Domain name (e.g. '안전성검토')",
+        help="도메인명. 설정 시 N:1 synthesis 모드 활성화. 예: 안전성검토, 첨가물제출. .base에서 raw 문서를 자동 발견.",
     )
     parser.add_argument(
         "--vault-root",
         type=Path,
         default=None,
-        help="Vault root path",
+        help="Obsidian vault 루트 경로. --domain과 함께 사용. 예: ~/Documents/Mywork",
     )
     parser.add_argument(
         "--filter",
         default=None,
-        help="Wildcard filter pattern (e.g. '(안전성검토)_*.md')",
+        help="와일드카드 필터. .base 결과를 추가 필터링. 예: '(안전성검토)_*.md' → 사전안전성검토 제외",
     )
     parser.add_argument(
         "--base",
         type=Path,
         default=None,
-        help="Path to .base index file",
+        help=".base 인덱스 파일 경로. Obsidian Base 파일로 raw 문서를 자동 발견. 예: index/안전성검토.base",
     )
 
     args = parser.parse_args()
