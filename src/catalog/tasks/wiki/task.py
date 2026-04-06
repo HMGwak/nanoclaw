@@ -18,9 +18,14 @@ from pathlib import Path
 
 import openai
 
-from .base_index import BaseIndexParser
-from .synthesizer import ChunkedSynthesizer
-from .wiki_tracker import WikiTracker
+try:
+    from .base_index import BaseIndexParser
+    from .synthesizer import ChunkedSynthesizer
+    from .wiki_tracker import WikiTracker
+except ImportError:
+    from base_index import BaseIndexParser  # type: ignore[no-redef]
+    from synthesizer import ChunkedSynthesizer  # type: ignore[no-redef]
+    from wiki_tracker import WikiTracker  # type: ignore[no-redef]
 
 
 @dataclass
@@ -148,14 +153,39 @@ UPDATE_SYSTEM_PROMPT = """\
 
 REVISE_SYSTEM_PROMPT = """\
 당신은 wiki 품질 개선 전문가입니다.
-피드백을 반영하여 wiki note를 개선합니다.
+피드백을 반영하여 wiki note의 특정 부분만 수정합니다.
 
 규칙:
-1. 피드백의 하드 게이트 실패 항목을 최우선으로 수정할 것
-2. 점수가 낮은 항목부터 순서대로 개선할 것
-3. raw 문서에 없는 내용을 절대 추가하지 말 것 (hallucination 금지)
-4. 기존 구조를 가능한 유지하면서 개선할 것
+1. 전체 문서를 다시 작성하지 말 것 — 수정이 필요한 부분만 diff로 제시할 것
+2. 피드백의 하드 게이트 실패 항목을 최우선으로 수정할 것
+3. 점수가 낮은 항목부터 순서대로 개선할 것
+4. raw 문서에 없는 내용을 절대 추가하지 말 것 (hallucination 금지)
 5. 각 개선 사항에 대해 raw 출처 각주를 반드시 달 것
+
+응답 형식 (JSON 배열):
+```json
+[
+  {
+    "action": "replace",
+    "search": "교체할 원본 텍스트 (정확히 일치해야 함)",
+    "replace": "새 텍스트"
+  },
+  {
+    "action": "insert_after",
+    "search": "이 텍스트 뒤에 삽입",
+    "content": "삽입할 새 텍스트"
+  },
+  {
+    "action": "delete",
+    "search": "삭제할 텍스트"
+  }
+]
+```
+
+주의:
+- search 필드는 원본 문서에서 정확히 찾을 수 있는 텍스트여야 함
+- 변경이 필요 없는 부분은 건드리지 말 것
+- 최소한의 변경으로 최대 효과를 낼 것
 """
 
 
@@ -264,43 +294,66 @@ class WikiTask:
         return RunResult(output_files=output_files)
 
     def revise(self, context, feedback) -> RunResult:
-        """Revise wiki notes based on quality-loop feedback."""
+        """Revise wiki notes via diff-based patching (not full regeneration)."""
         output_files: list[Path] = []
 
-        if context.config.get("domain"):
-            # Synthesis mode: re-synthesize with existing wiki as base
-            domain = context.config["domain"]
-            for prev_file in feedback.previous_output_files:
-                existing_wiki = prev_file.read_text(encoding="utf-8")
-                revision_prompt = self._build_revision_prompt(
-                    existing_wiki, feedback, context.reference_files
-                )
-                revised = self.agent.generate(
-                    system_prompt=REVISE_SYSTEM_PROMPT,
-                    user_prompt=revision_prompt,
-                )
-                out_path = context.output_dir / prev_file.name
-                out_path.write_text(revised, encoding="utf-8")
-                output_files.append(out_path)
-            return RunResult(output_files=output_files)
-
         for prev_file in feedback.previous_output_files:
-            prev_content = prev_file.read_text(encoding="utf-8")
-
+            existing_wiki = prev_file.read_text(encoding="utf-8")
             revision_prompt = self._build_revision_prompt(
-                prev_content, feedback, context.reference_files
+                existing_wiki, feedback, context.reference_files
             )
 
-            revised = self.agent.generate(
+            diff_response = self.agent.generate(
                 system_prompt=REVISE_SYSTEM_PROMPT,
                 user_prompt=revision_prompt,
             )
+
+            # Apply diffs to existing wiki
+            revised = self._apply_diffs(existing_wiki, diff_response)
 
             out_path = context.output_dir / prev_file.name
             out_path.write_text(revised, encoding="utf-8")
             output_files.append(out_path)
 
         return RunResult(output_files=output_files)
+
+    def _apply_diffs(self, original: str, diff_response: str) -> str:
+        """Apply diff patches from LLM response to original wiki content."""
+        try:
+            diffs = json.loads(_extract_json_from_text(diff_response))
+        except (json.JSONDecodeError, ValueError):
+            logger.warning("Diff parse failed, falling back to raw response as full replacement")
+            # If LLM didn't follow diff format, treat response as full content
+            return diff_response
+
+        if not isinstance(diffs, list):
+            logger.warning("Diff response is not a list, using as full replacement")
+            return diff_response
+
+        result = original
+        applied = 0
+        for i, diff in enumerate(diffs):
+            action = diff.get("action", "")
+            search = diff.get("search", "")
+
+            if not search or search not in result:
+                logger.warning("Diff #%d: search text not found, skipping", i)
+                continue
+
+            if action == "replace":
+                replacement = diff.get("replace", "")
+                result = result.replace(search, replacement, 1)
+                applied += 1
+            elif action == "insert_after":
+                content = diff.get("content", "")
+                result = result.replace(search, search + "\n" + content, 1)
+                applied += 1
+            elif action == "delete":
+                result = result.replace(search, "", 1)
+                applied += 1
+
+        logger.info("Applied %d/%d diffs", applied, len(diffs))
+        return result
 
     def _load_existing_wiki(self, reference_files: list[Path], domain: str) -> str | None:
         """Find and return the existing wiki note for domain, or None."""

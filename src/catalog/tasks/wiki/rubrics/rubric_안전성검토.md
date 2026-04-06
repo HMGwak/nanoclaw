@@ -49,9 +49,9 @@ def measure(output_files, reference_files):
 
 ### Checklist Presence
 - **타입**: 정량
-- **배점**: 0
-- **하드 게이트**: 3
-- **설명**: 담당자 확인용 체크리스트 항목 수
+- **배점**: 5
+- **하드 게이트**: 없음
+- **설명**: 담당자 확인용 체크리스트/절차 항목 수 (있으면 가점, 없어도 통과)
 
 #### 측정 방법
 ```python
@@ -62,7 +62,8 @@ def measure(output_files, reference_files):
         checklists = re.findall(r'^-\s*\[[ x]\]\s+', text, re.MULTILINE)
         bullets = re.findall(r'^-\s+(?:확인|체크|검증|대조|점검)', text, re.MULTILINE)
         count = len(checklists) + len(bullets)
-        return {"value": count, "detail": f"체크리스트/확인 항목 {count}개"}
+        score = min(count, 5)
+        return {"value": score / 5, "detail": f"체크리스트/확인 항목 {count}개"}
 ```
 
 ### Coverage
