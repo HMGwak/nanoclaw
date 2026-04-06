@@ -173,12 +173,13 @@ describe('service deployment resolution', () => {
     );
   });
 
-  it('disables workflow start authorization for discord after the debate-first refactor', () => {
+  it('only allows secretary to start workflows; all other discord groups are disabled', () => {
     expect(canStartWorkflowFromGroup('discord_planning')).toBe(false);
     expect(canStartWorkflowFromGroup('discord_planning_bot')).toBe(false);
     expect(canStartWorkflowFromGroup('discord_workshop')).toBe(false);
     expect(canStartWorkflowFromGroup('discord_workshop_teamlead')).toBe(false);
-    expect(canStartWorkflowFromGroup('discord_secretary')).toBe(false);
+    expect(canStartWorkflowFromGroup('discord_secretary')).toBe(true);
+    expect(canStartWorkflowFromGroup('discord_secretary_bot')).toBe(true);
     expect(canStartWorkflowFromGroup('any-group')).toBe(false);
   });
 

@@ -66,10 +66,11 @@ const DISCORD_BOT_RESOURCES: DiscordBotResourceSpec[] = [
     canonicalGroupFolder: 'discord_secretary_bot',
     aliasGroupFolders: ['discord_secretary', 'main'],
     leadPersonnelId: 'discord_secretary_lead',
-    flowIds: [],
+    flowIds: ['karpathy-loop'],
     personaMode: 'bot_only',
     responsePolicy: 'always',
     requiresTrigger: false,
+    canStartWorkflow: true,
     defaultAdditionalMounts: [
       {
         hostPath: SECRETARY_OBSIDIAN_VAULT_HOST_PATH,
