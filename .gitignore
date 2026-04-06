@@ -22,6 +22,14 @@ groups/global/*
 *.keys.json
 .env
 
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OMC state
+.omc/
+
 # Temp files
 .tmp-*
 
