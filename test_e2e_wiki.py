@@ -1,4 +1,4 @@
-"""E2E test: WikiTask + Quality Loop + ChatGPT OAuth with real vault data."""
+"""E2E test: WikiTask N:1 synthesis + Quality Loop + ChatGPT OAuth."""
 
 import logging
 import sys
@@ -19,23 +19,16 @@ from agents import OpenAIAgents  # noqa: E402
 from engine import run_loop  # noqa: E402
 
 VAULT = Path.home() / "Documents" / "Mywork"
-INPUT_DIR = VAULT / "4. Archive" / "inbox"
+BASE_PATH = VAULT / "3. Resource" / "LLM Knowledge Base" / "index" / "안전성검토.base"
 WIKI_DIR = VAULT / "3. Resource" / "LLM Knowledge Base" / "wiki"
-RUBRIC = Path("src/catalog/tasks/wiki/rubric_wiki.md")
-OUTPUT = Path("/tmp/ql_wiki_e2e")
-
-# Input: (안전성검토)_*.md only (not 사전안전성검토), limit to 2
-input_files = sorted([
-    f for f in INPUT_DIR.glob("(안전성검토)_*.md")
-    if not f.name.startswith("(사전안전성검토)")
-])[:2]
+RUBRIC = Path("src/catalog/tasks/wiki/rubrics/rubric_안전성검토.md")
+OUTPUT = Path("/tmp/ql_wiki_synthesis")
 
 # Reference: existing wiki notes
 reference_files = sorted(WIKI_DIR.glob("*.md"))
 
-print(f"Input files ({len(input_files)}):")
-for f in input_files:
-    print(f"  {f.name}")
+print(f"Base index: {BASE_PATH}")
+print(f"Filter: (안전성검토)_*.md")
 print(f"Reference files ({len(reference_files)}):")
 for f in reference_files:
     print(f"  {f.name}")
@@ -46,13 +39,21 @@ print()
 task = WikiTask()
 agents = OpenAIAgents()
 
+# N:1 synthesis mode via context.config
 report = run_loop(
     task=task,
     rubric_path=RUBRIC,
-    input_files=input_files,
+    input_files=[],  # discovery handled by base_index
     reference_files=reference_files,
     agents=agents,
     output_dir=OUTPUT,
+    context_config={
+        "domain": "안전성검토",
+        "base_path": str(BASE_PATH),
+        "vault_root": str(VAULT),
+        "filter": "(안전성검토)_*.md",
+        "max_docs": 20,  # limit for testing
+    },
 )
 
 print(f"\n{'='*60}")

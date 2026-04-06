@@ -162,30 +162,35 @@ REVISE_SYSTEM_PROMPT = """\
 4. raw 문서에 없는 내용을 절대 추가하지 말 것 (hallucination 금지)
 5. 각 개선 사항에 대해 raw 출처 각주를 반드시 달 것
 
+원본 문서는 줄번호와 함께 제공됩니다. 줄번호를 참조하여 정확한 위치를 지정하세요.
+
 응답 형식 (JSON 배열):
 ```json
 [
   {
     "action": "replace",
-    "search": "교체할 원본 텍스트 (정확히 일치해야 함)",
-    "replace": "새 텍스트"
+    "start_line": 45,
+    "end_line": 47,
+    "content": "교체할 새 텍스트 (여러 줄 가능)"
   },
   {
     "action": "insert_after",
-    "search": "이 텍스트 뒤에 삽입",
-    "content": "삽입할 새 텍스트"
+    "line": 30,
+    "content": "이 줄 뒤에 삽입할 텍스트"
   },
   {
     "action": "delete",
-    "search": "삭제할 텍스트"
+    "start_line": 10,
+    "end_line": 12
   }
 ]
 ```
 
 주의:
-- search 필드는 원본 문서에서 정확히 찾을 수 있는 텍스트여야 함
+- start_line/end_line/line은 원본의 줄번호 (1부터 시작)
 - 변경이 필요 없는 부분은 건드리지 말 것
 - 최소한의 변경으로 최대 효과를 낼 것
+- 줄번호는 원본 문서 기준이며, 이전 diff 적용 후가 아님
 """
 
 
@@ -217,6 +222,12 @@ class WikiTask:
         # 1. Discover inputs
         parser = BaseIndexParser(vault_root)
         all_docs = parser.discover(base_path, filter_pattern=filter_pattern)
+
+        # Optional: limit docs for testing
+        max_docs = context.config.get("max_docs")
+        if max_docs and isinstance(max_docs, int) and max_docs < len(all_docs):
+            logger.info("Limiting to %d/%d docs (max_docs)", max_docs, len(all_docs))
+            all_docs = all_docs[:max_docs]
 
         # 2. Track changes
         tracker = WikiTracker()
@@ -318,42 +329,63 @@ class WikiTask:
         return RunResult(output_files=output_files)
 
     def _apply_diffs(self, original: str, diff_response: str) -> str:
-        """Apply diff patches from LLM response to original wiki content."""
+        """Apply line-based diff patches from LLM response to original wiki."""
         try:
             diffs = json.loads(_extract_json_from_text(diff_response))
         except (json.JSONDecodeError, ValueError):
-            logger.warning("Diff parse failed, falling back to raw response as full replacement")
-            # If LLM didn't follow diff format, treat response as full content
-            return diff_response
+            logger.warning("Diff parse failed, keeping original wiki unchanged")
+            return original
 
         if not isinstance(diffs, list):
-            logger.warning("Diff response is not a list, using as full replacement")
-            return diff_response
+            logger.warning("Diff response is not a list, keeping original wiki unchanged")
+            return original
 
-        result = original
+        lines = original.split("\n")
+        # Sort diffs by line number descending so later edits don't shift earlier ones
+        def sort_key(d):
+            return d.get("start_line", d.get("line", 0))
+
+        diffs_sorted = sorted(diffs, key=sort_key, reverse=True)
+
         applied = 0
-        for i, diff in enumerate(diffs):
+        for i, diff in enumerate(diffs_sorted):
             action = diff.get("action", "")
-            search = diff.get("search", "")
-
-            if not search or search not in result:
-                logger.warning("Diff #%d: search text not found, skipping", i)
-                continue
 
             if action == "replace":
-                replacement = diff.get("replace", "")
-                result = result.replace(search, replacement, 1)
-                applied += 1
-            elif action == "insert_after":
+                start = diff.get("start_line", 0) - 1  # 1-indexed → 0-indexed
+                end = diff.get("end_line", start + 1) - 1
                 content = diff.get("content", "")
-                result = result.replace(search, search + "\n" + content, 1)
-                applied += 1
+                if 0 <= start <= end < len(lines):
+                    new_lines = content.split("\n")
+                    lines[start:end + 1] = new_lines
+                    applied += 1
+                else:
+                    logger.warning("Diff #%d: line range %d-%d out of bounds (%d lines)", i, start+1, end+1, len(lines))
+
+            elif action == "insert_after":
+                line = diff.get("line", 0) - 1
+                content = diff.get("content", "")
+                if 0 <= line < len(lines):
+                    new_lines = content.split("\n")
+                    lines[line + 1:line + 1] = new_lines
+                    applied += 1
+                else:
+                    logger.warning("Diff #%d: line %d out of bounds (%d lines)", i, line+1, len(lines))
+
             elif action == "delete":
-                result = result.replace(search, "", 1)
-                applied += 1
+                start = diff.get("start_line", 0) - 1
+                end = diff.get("end_line", start + 1) - 1
+                if 0 <= start <= end < len(lines):
+                    del lines[start:end + 1]
+                    applied += 1
+                else:
+                    logger.warning("Diff #%d: delete range %d-%d out of bounds (%d lines)", i, start+1, end+1, len(lines))
 
         logger.info("Applied %d/%d diffs", applied, len(diffs))
-        return result
+        if applied == 0:
+            logger.warning("No diffs could be applied, keeping original")
+            return original
+        return "\n".join(lines)
 
     def _load_existing_wiki(self, reference_files: list[Path], domain: str) -> str | None:
         """Find and return the existing wiki note for domain, or None."""
@@ -383,7 +415,11 @@ class WikiTask:
         feedback,
         reference_files: list[Path],
     ) -> str:
-        lines = [f"현재 wiki note:\n{content}\n"]
+        # Include line numbers for precise diff targeting
+        numbered = "\n".join(
+            f"{i+1}: {line}" for i, line in enumerate(content.split("\n"))
+        )
+        lines = [f"현재 wiki note (줄번호 포함):\n{numbered}\n"]
         lines.append(f"총점: {feedback.total_score}\n")
 
         if feedback.hard_gate_failures:
