@@ -26,6 +26,7 @@ groups/global/*
 __pycache__/
 *.pyc
 .venv/
+*.db
 
 # OMC state
 .omc/
