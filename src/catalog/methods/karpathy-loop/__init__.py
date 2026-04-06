@@ -1,6 +1,6 @@
 """Quality Loop Engine - universal LLM quality loop framework."""
 
-from .types import (
+from .loop_types import (
     AgentsProtocol,
     CancellationToken,
     Context,

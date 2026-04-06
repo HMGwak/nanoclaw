@@ -15,27 +15,50 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from .agents import OpenAIAgents
-from .types import (
-    AgentsProtocol,
-    CancellationToken,
-    Context,
-    EvalOutput,
-    EvalResult,
-    Feedback,
-    FeedbackItem,
-    HardGateFailure,
-    HardGateResult,
-    ItemScore,
-    IterationRecord,
-    LoopCallbacks,
-    LoopCancelledError,
-    LoopReport,
-    RubricConfig,
-    RubricItem,
-    RunResult,
-    TaskProtocol,
-)
+try:
+    from .agents import OpenAIAgents
+    from .loop_types import (
+        AgentsProtocol,
+        CancellationToken,
+        Context,
+        EvalOutput,
+        EvalResult,
+        Feedback,
+        FeedbackItem,
+        HardGateFailure,
+        HardGateResult,
+        ItemScore,
+        IterationRecord,
+        LoopCallbacks,
+        LoopCancelledError,
+        LoopReport,
+        RubricConfig,
+        RubricItem,
+        RunResult,
+        TaskProtocol,
+    )
+except ImportError:
+    from agents import OpenAIAgents  # type: ignore[no-redef]
+    from loop_types import (  # type: ignore[no-redef]
+        AgentsProtocol,
+        CancellationToken,
+        Context,
+        EvalOutput,
+        EvalResult,
+        Feedback,
+        FeedbackItem,
+        HardGateFailure,
+        HardGateResult,
+        ItemScore,
+        IterationRecord,
+        LoopCallbacks,
+        LoopCancelledError,
+        LoopReport,
+        RubricConfig,
+        RubricItem,
+        RunResult,
+        TaskProtocol,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -742,8 +765,8 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="claude-sonnet-4-6",
-        help="LLM model to use (default: claude-sonnet-4-6)",
+        default="gpt-5.4",
+        help="LLM model to use (default: gpt-5.4)",
     )
 
     args = parser.parse_args()
@@ -779,10 +802,16 @@ def main():
 
 def _load_task(task_spec: str) -> TaskProtocol:
     """Load a task class from 'module.ClassName' string."""
+    import sys
+
     if "." not in task_spec:
         raise ValueError(
             f"Invalid task spec '{task_spec}': must be 'module.ClassName'"
         )
+    # Add engine's directory to sys.path for local task modules
+    engine_dir = str(Path(__file__).parent)
+    if engine_dir not in sys.path:
+        sys.path.insert(0, engine_dir)
     module_path, _, class_name = task_spec.rpartition(".")
     module = importlib.import_module(module_path)
     cls = getattr(module, class_name)

@@ -13,13 +13,22 @@ from typing import Any
 
 import openai
 
-from .types import (
-    Context,
-    EvalResult,
-    Feedback,
-    ItemScore,
-    RunResult,
-)
+try:
+    from .loop_types import (
+        Context,
+        EvalResult,
+        Feedback,
+        ItemScore,
+        RunResult,
+    )
+except ImportError:
+    from loop_types import (  # type: ignore[no-redef]
+        Context,
+        EvalResult,
+        Feedback,
+        ItemScore,
+        RunResult,
+    )
 
 logger = logging.getLogger(__name__)
 

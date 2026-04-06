@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 
-from .types import Context, Feedback, RunResult
+from .loop_types import Context, Feedback, RunResult
 
 logger = logging.getLogger(__name__)
 
