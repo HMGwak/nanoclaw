@@ -53,6 +53,45 @@ const AGENTS: Record<string, AgentSpec> = {
     defaultToolsetIds: ['global_general_cli'],
     defaultFlowIds: [],
   },
+  local_mlx_gemma4_26b_generalist: {
+    id: 'local_mlx_gemma4_26b_generalist',
+    displayName: 'Local Gemma4 26B Generalist',
+    baseProfileId: 'local_mlx_gemma4_26b',
+    role: 'Local MLX execution specialist (Gemma4 26B)',
+    capabilityPrompt: [
+      'You are operating as a general execution specialist.',
+      'Your capability is carrying work from analysis through implementation and verification.',
+      'You run on a local MLX-hosted Gemma4 26B endpoint.',
+    ].join('\n'),
+    defaultToolsetIds: ['global_general_cli'],
+    defaultFlowIds: [],
+  },
+  local_mlx_gemma4_e4b_generalist: {
+    id: 'local_mlx_gemma4_e4b_generalist',
+    displayName: 'Local Gemma4 E4B Generalist',
+    baseProfileId: 'local_mlx_gemma4_e4b',
+    role: 'Local MLX execution specialist (Gemma4 E4B)',
+    capabilityPrompt: [
+      'You are operating as a general execution specialist.',
+      'Your capability is carrying work from analysis through implementation and verification.',
+      'You run on a local MLX-hosted Gemma4 E4B endpoint.',
+    ].join('\n'),
+    defaultToolsetIds: ['global_general_cli'],
+    defaultFlowIds: [],
+  },
+  local_mlx_qwen35_9b_generalist: {
+    id: 'local_mlx_qwen35_9b_generalist',
+    displayName: 'Local Qwen3.5 9B Generalist',
+    baseProfileId: 'local_mlx_qwen35_9b',
+    role: 'Local MLX execution specialist (Qwen3.5 9B)',
+    capabilityPrompt: [
+      'You are operating as a general execution specialist.',
+      'Your capability is carrying work from analysis through implementation and verification.',
+      'You run on a local MLX-hosted Qwen3.5 9B endpoint.',
+    ].join('\n'),
+    defaultToolsetIds: ['global_general_cli'],
+    defaultFlowIds: [],
+  },
 };
 
 export function getAgentSpec(id: string): AgentSpec | null {

@@ -17,6 +17,24 @@ const SDK_PROFILES: Record<string, SdkProfileSpec> = {
     model: 'gpt-5.4',
     // Uses ~/.codex/auth.json OAuth tokens via ChatGPT backend API
   },
+  local_mlx_gemma4_26b: {
+    id: 'local_mlx_gemma4_26b',
+    backend: 'openai',
+    model: 'default_model',
+    baseUrl: 'http://host.docker.internal:18081/v1',
+  },
+  local_mlx_gemma4_e4b: {
+    id: 'local_mlx_gemma4_e4b',
+    backend: 'openai',
+    model: 'default_model',
+    baseUrl: 'http://host.docker.internal:18082/v1',
+  },
+  local_mlx_qwen35_9b: {
+    id: 'local_mlx_qwen35_9b',
+    backend: 'openai',
+    model: 'default_model',
+    baseUrl: 'http://host.docker.internal:18083/v1',
+  },
 };
 
 export function getSdkProfileSpec(id: string): SdkProfileSpec | null {
