@@ -57,16 +57,22 @@ class BaseIndexParser:
         """
         data = self.parse(base_file)
         views = data.get("views", [])
-        if not views:
-            return []
 
-        view = (
-            next((v for v in views if v.get("name") == view_name), views[0])
-            if view_name
-            else views[0]
-        )
+        # Top-level filters apply to ALL views
+        top_rules = self._extract_rules(data.get("filters", {}))
 
-        rules = self._extract_rules(view.get("filters", {}))
+        view = None
+        if views:
+            view = (
+                next((v for v in views if v.get("name") == view_name), views[0])
+                if view_name
+                else views[0]
+            )
+
+        # Merge top-level + view-level rules (AND semantics)
+        view_rules = self._extract_rules(view.get("filters", {})) if view else []
+        rules = top_rules + view_rules
+
         matched = [
             f
             for f in self.vault_root.rglob("*.md")

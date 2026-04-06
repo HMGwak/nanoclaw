@@ -268,9 +268,14 @@ class WikiTask:
         vault_root = Path(context.config.get("vault_root", ""))
         filter_pattern = context.config.get("filter")
 
-        # 1. Discover inputs
-        parser = BaseIndexParser(vault_root)
-        all_docs = parser.discover(base_path, filter_pattern=filter_pattern)
+        # 1. Discover inputs (or use pre-filtered docs)
+        prefilled = context.config.get("prefilled_docs")
+        if prefilled:
+            all_docs = [Path(p) for p in prefilled]
+            logger.info("Using %d pre-filtered docs", len(all_docs))
+        else:
+            parser = BaseIndexParser(vault_root)
+            all_docs = parser.discover(base_path, filter_pattern=filter_pattern)
 
         # Optional: limit docs for testing
         max_docs = context.config.get("max_docs")

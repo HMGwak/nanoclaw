@@ -107,10 +107,25 @@ _DEFAULT_STRUCTURE = [
 
 def _build_reduce_system_prompt(doc_structure: list[str] | None = None) -> str:
     headings = doc_structure or _DEFAULT_STRUCTURE
-    lines = ["wiki note 형식:", "1. YAML frontmatter (tags, created, domain 포함)"]
+    lines = [
+        "IMPORTANT: You MUST use EXACTLY the following heading structure. Do NOT add, rename, or reorder sections.",
+        "",
+        "Required wiki note structure:",
+        "1. YAML frontmatter (tags, created, domain)",
+    ]
     for i, h in enumerate(headings, 2):
         lines.append(f"{i}. {h}")
     lines.append(f"{len(headings) + 2}. 각주 섹션 (raw 문서 파일명 기반)")
+
+    # Template pattern: {국가} → repeat per country
+    has_template = any("{국가}" in h for h in headings)
+    if has_template:
+        lines.append("")
+        lines.append("Template rule for {국가}:")
+        lines.append("- Headings marked with {국가} MUST be repeated for EACH country found in the raw documents.")
+        lines.append("- Replace {국가} with the actual country name (e.g. ### 대만, ### 러시아, ### 나이지리아).")
+        lines.append("- Under each country heading, include: 절차, 필수 서류, 주요 사례 as bullet points or sub-content.")
+
     structure_block = "\n".join(lines)
     return _REDUCE_SYSTEM_BASE.format(structure_block=structure_block)
 
