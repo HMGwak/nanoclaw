@@ -18,9 +18,21 @@ from pathlib import Path
 from pydantic import BaseModel
 
 try:
-    from .json_utils import try_parse_validated
+    from .json_utils import try_parse_validated, parse_validated_list
+    from .markdown_utils import (
+        MarkdownSectionEditor,
+        SectionEdit,
+        strip_code_blocks,
+        filter_attachment_footnotes,
+    )
 except ImportError:
-    from json_utils import try_parse_validated
+    from json_utils import try_parse_validated, parse_validated_list  # type: ignore[no-redef]
+    from markdown_utils import (  # type: ignore[no-redef]
+        MarkdownSectionEditor,
+        SectionEdit,
+        strip_code_blocks,
+        filter_attachment_footnotes,
+    )
 
 
 class MapExtraction(BaseModel):
@@ -83,16 +95,30 @@ wiki note 형식:
 
 UPDATE_REDUCE_SYSTEM_PROMPT = """\
 당신은 전문 wiki 업데이트 작성자입니다.
-기존 wiki note에 새로 추출된 패턴 JSON들을 통합하여 wiki note를 갱신합니다.
+기존 wiki note의 내용을 분석하고, 새로 추출된 패턴 정보를 반영하여 특정 섹션만 수정하는 JSON을 생성합니다.
+
+수정 방식 (JSON 배열):
+- replace_section: 특정 섹션의 본문 내용을 교체 (제목은 유지)
+- add_section: 새로운 섹션을 특정 섹션 뒤에 추가 (부모 섹션 경로 지정)
+- append_to: 특정 섹션의 끝에 내용을 추가
+
+응답 형식:
+```json
+[
+  {
+    "action": "replace_section",
+    "heading_path": "## 반복 패턴 > ### 반복 입력자료",
+    "content": "- 기존 내용 유지하며 신규 항목 추가 (각주 포함)"
+  }
+]
+```
 
 규칙:
-1. 기존 wiki의 구조, 섹션, 톤을 유지할 것
-2. 새 패턴 정보를 적절한 섹션에 통합할 것
-3. 각주는 Obsidian 표준 형식: 본문 [^숫자], 하단 [^숫자]: [[(파일명)]] (.md 제거)
-4. 기존 각주 번호를 유지하고 새 각주는 이어서 번호를 매길 것
-5. raw 데이터에 없는 내용을 추가하지 말 것 (hallucination 금지)
-6. 중복 내용을 제거하고 최신 정보로 갱신할 것
-7. 한국어로 작성할 것
+1. 기존 wiki의 구조와 톤을 최대한 유지할 것
+2. 각주 번호는 기존 번호에 이어지도록 매길 것. Obsidian 표준 형식: 본문 [^1], 하단 [^1]: [[(파일명)]]
+3. heading_path는 '## 제목1 > ### 제목2' 와 같은 형식으로 정확히 지정할 것
+4. 중복 내용을 제거하고 최신 정보로 갱신할 것
+5. 한국어로 작성할 것
 """
 
 
@@ -107,9 +133,19 @@ class ChunkedSynthesizer:
         batch_size: Number of documents processed per map step.
     """
 
-    def __init__(self, agent, batch_size: int = 25) -> None:
+    def __init__(self, agent, batch_size: int = 10) -> None:
         self.agent = agent
-        self.batch_size = batch_size
+        
+        # Adaptive batch size based on model
+        model_name = getattr(agent, "model", "").lower()
+        if "e4b" in model_name:
+            self.batch_size = 5
+        elif "26b" in model_name:
+            self.batch_size = 15
+        elif "gpt-5.4" in model_name or "gpt-4" in model_name:
+            self.batch_size = 30
+        else:
+            self.batch_size = batch_size
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -138,13 +174,30 @@ class ChunkedSynthesizer:
             logger.warning("synthesize() called with empty docs list")
             return existing_wiki or ""
 
-        # Map phase
+        # Map phase - processes all docs in batches
         extractions = self._map(docs)
+        if not extractions:
+            return existing_wiki or ""
 
-        # Reduce phase
+        # Reduce phase - iterative update to avoid model degradation
         if existing_wiki:
-            return self._update_reduce(extractions, existing_wiki, docs, domain)
-        return self._create_reduce(extractions, docs, domain)
+            wiki = self._update_reduce(extractions, existing_wiki, docs, domain)
+        else:
+            # Iterative create: Use first batch to create initial wiki, then update
+            logger.info("Creating initial wiki from first batch")
+            first_batch_docs = docs[:self.batch_size]
+            wiki = self._create_reduce([extractions[0]], first_batch_docs, domain)
+            
+            if len(extractions) > 1:
+                logger.info("Iteratively updating wiki with remaining %d batches", len(extractions) - 1)
+                remaining_docs = docs[self.batch_size:]
+                wiki = self._update_reduce(extractions[1:], wiki, remaining_docs, domain)
+            
+        # Post-processing
+        wiki = strip_code_blocks(wiki)
+        wiki = filter_attachment_footnotes(wiki)
+        
+        return wiki
 
     # ── Map phase ─────────────────────────────────────────────────
 
@@ -214,21 +267,65 @@ class ChunkedSynthesizer:
         docs: list[Path],
         domain: str,
     ) -> str:
-        """Merge extractions into an existing wiki note."""
-        extractions_text = _format_extractions(extractions)
-        source_list = "\n".join(f"- {p.name}" for p in docs)
-        domain_line = f"도메인: {domain}\n\n" if domain else ""
+        """Iteratively merge extractions into an existing wiki note using section diffs."""
+        current_wiki = existing_wiki
+        
+        for i, ext in enumerate(extractions):
+            logger.info("Updating wiki with extraction %d/%d", i + 1, len(extractions))
+            
+            ext_text = json.dumps(ext, ensure_ascii=False, indent=2)
+            sources = ext.get("_sources", [])
+            source_list = "\n".join(f"- {s}" for s in sources)
+            domain_line = f"도메인: {domain}\n\n" if domain else ""
 
-        user_prompt = (
-            f"{domain_line}"
-            f"=== 기존 wiki note ===\n{existing_wiki}\n\n"
-            f"=== 새로 추출된 패턴 ({len(extractions)}개 배치) ===\n{extractions_text}\n\n"
-            f"=== 추가된 raw 문서 목록 ===\n{source_list}"
-        )
-        return self.agent.generate(
-            system_prompt=UPDATE_REDUCE_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-        )
+            user_prompt = (
+                f"{domain_line}"
+                f"=== 기존 wiki note ===\n{current_wiki}\n\n"
+                f"=== 신규 추출 패턴 (배치 {i+1}) ===\n{ext_text}\n\n"
+                f"=== 이번 배치 raw 문서 목록 ===\n{source_list}"
+            )
+            
+            diff_response = self.agent.generate(
+                system_prompt=UPDATE_REDUCE_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+            )
+            
+            # Apply section-based diffs to current wiki
+            current_wiki = self._apply_section_diffs(current_wiki, diff_response)
+
+        return current_wiki
+
+    def _apply_section_diffs(self, original: str, response: str) -> str:
+        """Apply section-based edits from LLM JSON response."""
+        try:
+            edits = parse_validated_list(response, SectionEdit)
+        except ValueError:
+            logger.warning("Section diff parse failed, keeping original")
+            return original
+
+        if not edits:
+            return original
+
+        editor = MarkdownSectionEditor(original)
+        applied = 0
+        for i, edit in enumerate(edits):
+            success = False
+            if edit.action == "replace_section":
+                success = editor.replace_section(edit.heading_path or "", edit.content)
+            elif edit.action == "append_to":
+                success = editor.append_to_section(edit.heading_path or "", edit.content)
+            elif edit.action == "add_section":
+                success = editor.add_section(
+                    edit.parent_heading_path or "",
+                    edit.new_heading or "",
+                    edit.content,
+                )
+
+            if success:
+                applied += 1
+
+        logger.info("Applied %d/%d section edits", applied, len(edits))
+        return editor.get_content() if applied > 0 else original
 
     def _build_reduce_user_prompt(
         self, extractions: list[dict], docs: list[Path], domain: str
