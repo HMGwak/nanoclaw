@@ -12,9 +12,17 @@ import json
 import logging
 import os
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import openai
+
+
+@dataclass
+class RunResult:
+    """Task run/revise return type (mirrors loop_types.RunResult)."""
+    output_files: list[Path]
+    metadata: dict = field(default_factory=dict)
 
 try:
     from catalog.sdk_profiles.chatgpt_oauth import ChatGPTClient
@@ -160,7 +168,7 @@ class WikiTask:
 
     def run(self, context) -> dict:
         """Generate wiki notes from input files."""
-        from catalog.methods.karpathy_loop.loop_types import RunResult
+        # RunResult defined at module level
 
         output_files: list[Path] = []
 
@@ -216,7 +224,7 @@ class WikiTask:
 
     def revise(self, context, feedback) -> dict:
         """Revise wiki notes based on quality-loop feedback."""
-        from catalog.methods.karpathy_loop.loop_types import RunResult
+        # RunResult defined at module level
 
         output_files: list[Path] = []
 
