@@ -65,11 +65,44 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+# ── Local Gemma ──────────────────────────────────────────────────
+GEMMA_SCRIPT = Path.home() / "Automation" / "local_llm_model" / "run_local_gemma.sh"
+GEMMA_MODELS = {"gemma4-26b": "26b", "gemma4-e4b": "e4b"}
+
+
+class LocalGemmaAgent:
+    """Local Gemma4 agent via subprocess."""
+
+    def __init__(self, model: str = "gemma4-26b"):
+        self.model_key = GEMMA_MODELS.get(model, "26b")
+        self.model = model
+
+    def generate(self, system_prompt: str, user_prompt: str) -> str:
+        prompt = f"{system_prompt}\n\n{user_prompt}"
+        result = subprocess.run(
+            [str(GEMMA_SCRIPT), self.model_key, "generate", prompt],
+            capture_output=True, text=True, timeout=600,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Gemma failed (exit {result.returncode})")
+        parts = result.stdout.split("==========")
+        return parts[1].strip() if len(parts) >= 2 else result.stdout.strip()
+
+
 # ── Agent ────────────────────────────────────────────────────────
 class WikiAgent:
     """Generalist agent for wiki content generation."""
 
     def __init__(self, model: str | None = None):
+        # Local Gemma models
+        if model in GEMMA_MODELS:
+            self._local = LocalGemmaAgent(model)
+            self._use_chatgpt = False
+            self._use_local = True
+            self.model = model
+            return
+
+        self._use_local = False
         backend = os.environ.get("NANOCLAW_AGENT_BACKEND", "")
 
         # Try ChatGPT OAuth first when auth.json exists and no explicit backend override
@@ -102,6 +135,8 @@ class WikiAgent:
         self.model = model or default_model
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
+        if self._use_local:
+            return self._local.generate(system_prompt, user_prompt)
         if self._use_chatgpt:
             return self._chatgpt.generate(system_prompt, user_prompt)
         max_retries = 5
