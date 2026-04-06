@@ -1,4 +1,4 @@
-"""Claude SDK adapter implementing AgentsProtocol + SubprocessTask adapter."""
+"""OpenAI SDK adapter implementing AgentsProtocol + SubprocessTask adapter."""
 
 from __future__ import annotations
 
@@ -8,11 +8,10 @@ import os
 import shlex
 import subprocess
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import anthropic
+import openai
 
 from .types import (
     Context,
@@ -25,17 +24,19 @@ from .types import (
 logger = logging.getLogger(__name__)
 
 
-# ── ClaudeAgents ──────────────────────────────────────────────────
-class ClaudeAgents:
-    """Claude SDK adapter implementing AgentsProtocol."""
+# ── OpenAIAgents ─────────────────────────────────────────────────
+class OpenAIAgents:
+    """OpenAI SDK adapter implementing AgentsProtocol."""
 
-    def __init__(self, model: str = "claude-sonnet-4-6"):
-        self.client = anthropic.Anthropic()
-        self.model = model
+    def __init__(self, model: str | None = None):
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        base_url = os.environ.get("OPENAI_BASE_URL") or None
+        self.client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        self.model = model or os.environ.get("QUALITY_LOOP_MODEL", "gpt-5.4")
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
         response = self._call_api(system_prompt, user_prompt)
-        return response.content[0].text
+        return response.choices[0].message.content or ""
 
     def evaluate(
         self,
@@ -78,17 +79,19 @@ class ClaudeAgents:
         )
 
     def _call_api(self, system_prompt: str, user_prompt: str) -> Any:
-        """Call Anthropic API with retry policy."""
+        """Call OpenAI API with retry policy."""
         max_retries = 5
         for attempt in range(max_retries + 1):
             try:
-                return self.client.messages.create(
+                return self.client.chat.completions.create(
                     model=self.model,
                     max_tokens=8192,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": user_prompt}],
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
                 )
-            except anthropic.RateLimitError:
+            except openai.RateLimitError:
                 if attempt >= max_retries:
                     raise
                 delay = min(2**attempt, 16)
@@ -99,28 +102,26 @@ class ClaudeAgents:
                     delay,
                 )
                 time.sleep(delay)
-            except anthropic.InternalServerError:
+            except openai.InternalServerError:
                 if attempt >= 2:
                     raise
                 logger.warning(
                     "Server error (5xx), retry %d/3", attempt + 1
                 )
-            except anthropic.AuthenticationError:
+            except openai.AuthenticationError:
                 raise
-            except anthropic.PermissionDeniedError:
+            except openai.PermissionDeniedError:
                 raise
         raise RuntimeError("Unreachable: API call exhausted retries")
 
 
 def _extract_json(text: str) -> str:
     """Extract JSON object from LLM response text."""
-    # Try to find JSON block in markdown code fence
     import re
 
     m = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
     if m:
         return m.group(1).strip()
-    # Try to find raw JSON object
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end != -1 and end > start:
@@ -164,7 +165,6 @@ class SubprocessTask:
         return RunResult(output_files=new_files)
 
     def revise(self, context: Context, feedback: Feedback) -> RunResult:
-        # Serialize feedback to JSON file
         feedback_path = context.output_dir / ".feedback.json"
         feedback_data = {
             "iteration": feedback.iteration,
@@ -230,8 +230,10 @@ class SubprocessTask:
     def _build_env(self, context: Context) -> dict[str, str]:
         env = os.environ.copy()
         env["QUALITY_LOOP_RUN_ID"] = context.run_id
-        if "ANTHROPIC_API_KEY" in os.environ:
-            env["ANTHROPIC_API_KEY"] = os.environ["ANTHROPIC_API_KEY"]
-        model = context.config.get("model", "claude-sonnet-4-6")
+        if "OPENAI_API_KEY" in os.environ:
+            env["OPENAI_API_KEY"] = os.environ["OPENAI_API_KEY"]
+        if "OPENAI_BASE_URL" in os.environ:
+            env["OPENAI_BASE_URL"] = os.environ["OPENAI_BASE_URL"]
+        model = context.config.get("model", "gpt-5.4")
         env["QUALITY_LOOP_MODEL"] = model
         return env

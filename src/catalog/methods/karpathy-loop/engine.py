@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from .agents import ClaudeAgents
+from .agents import OpenAIAgents
 from .types import (
     AgentsProtocol,
     CancellationToken,
@@ -762,7 +762,7 @@ def main():
     logger.info("Input files: %d", len(input_files))
     logger.info("Reference files: %d", len(reference_files))
 
-    agents = ClaudeAgents(model=args.model)
+    agents = OpenAIAgents(model=args.model)
 
     report = run_loop(
         task=task,

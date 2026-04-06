@@ -2,6 +2,8 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
+import { getAgentBackendConfig } from './agent-backend.js';
+
 import { OneCLI } from '@onecli-sh/sdk';
 
 import {
@@ -1012,10 +1014,23 @@ async function main(): Promise<void> {
 
       fs.mkdirSync(params.outputDir, { recursive: true });
 
+      // Inject agent backend credentials into subprocess environment
+      const backendConfig = getAgentBackendConfig();
+      const subprocessEnv: Record<string, string> = { ...process.env } as Record<string, string>;
+      if (backendConfig.openaiApiKey) {
+        subprocessEnv.OPENAI_API_KEY = backendConfig.openaiApiKey;
+      }
+      if (backendConfig.openaiBaseUrl) {
+        subprocessEnv.OPENAI_BASE_URL = backendConfig.openaiBaseUrl;
+      }
+      if (backendConfig.openaiModel) {
+        subprocessEnv.QUALITY_LOOP_MODEL = backendConfig.openaiModel;
+      }
+
       return new Promise((resolve, reject) => {
         const proc = spawn(pythonBin, args, {
           cwd: path.resolve(__dirname, '..'),
-          env: { ...process.env },
+          env: subprocessEnv,
           stdio: ['ignore', 'pipe', 'pipe'],
         });
 
