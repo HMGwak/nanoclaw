@@ -86,13 +86,16 @@ class LocalGemmaAgent:
 
 # ── Agent ────────────────────────────────────────────────────────
 class WikiAgent:
-    """Generalist agent for wiki content generation."""
+    """Generalist agent for wiki content generation.
+
+    Auth priority: Local Gemma → ChatGPT OAuth → env-based openai SDK.
+    All paths use the openai SDK; ChatGPTClient wraps OAuth token management.
+    """
 
     def __init__(self, model: str | None = None):
         # Local Gemma models
         if model in GEMMA_MODELS:
             self._local = LocalGemmaAgent(model)
-            self._use_chatgpt = False
             self._use_local = True
             self.model = model
             return
@@ -100,7 +103,7 @@ class WikiAgent:
         self._use_local = False
         backend = os.environ.get("NANOCLAW_AGENT_BACKEND", "")
 
-        # Try ChatGPT OAuth first when auth.json exists and no explicit backend override
+        # ChatGPT OAuth (openai SDK + custom base_url)
         if (
             ChatGPTClient is not None
             and ChatGPTClient.AUTH_PATH.exists()
@@ -113,15 +116,12 @@ class WikiAgent:
 
         self._use_chatgpt = False
 
+        # Env-based openai SDK fallback
         if backend in ("zai", "openai-compat"):
             api_key = os.environ.get("OPENAI_COMPAT_API_KEY", "")
             base_url = os.environ.get("OPENAI_COMPAT_BASE_URL", "https://api.z.ai/api/paas/v4/")
             default_model = os.environ.get("QUALITY_LOOP_MODEL", "glm-5")
-        elif backend == "openai":
-            api_key = os.environ.get("OPENAI_API_KEY", "")
-            base_url = os.environ.get("OPENAI_BASE_URL") or None
-            default_model = os.environ.get("QUALITY_LOOP_MODEL", "gpt-5.4")
-        else:  # opencode or other
+        else:
             api_key = os.environ.get("OPENAI_API_KEY", "") or os.environ.get("OPENCODE_API_KEY", "")
             base_url = os.environ.get("OPENAI_BASE_URL") or None
             default_model = os.environ.get("QUALITY_LOOP_MODEL", "gpt-5.4")
@@ -134,6 +134,7 @@ class WikiAgent:
             return self._local.generate(system_prompt, user_prompt)
         if self._use_chatgpt:
             return self._chatgpt.generate(system_prompt, user_prompt)
+
         max_retries = 5
         for attempt in range(max_retries + 1):
             try:
