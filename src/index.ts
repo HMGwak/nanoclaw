@@ -1016,16 +1016,24 @@ async function main(): Promise<void> {
 
       // Inject agent backend credentials into subprocess environment
       const backendConfig = getAgentBackendConfig();
-      const subprocessEnv: Record<string, string> = { ...process.env } as Record<string, string>;
-      if (backendConfig.openaiApiKey) {
-        subprocessEnv.OPENAI_API_KEY = backendConfig.openaiApiKey;
-      }
-      if (backendConfig.openaiBaseUrl) {
-        subprocessEnv.OPENAI_BASE_URL = backendConfig.openaiBaseUrl;
-      }
-      if (backendConfig.openaiModel) {
-        subprocessEnv.QUALITY_LOOP_MODEL = backendConfig.openaiModel;
-      }
+      const subprocessEnv: Record<string, string> = {
+        ...process.env,
+      } as Record<string, string>;
+      subprocessEnv.NANOCLAW_AGENT_BACKEND = backendConfig.backend;
+
+      // OpenAI
+      if (backendConfig.openaiApiKey) subprocessEnv.OPENAI_API_KEY = backendConfig.openaiApiKey;
+      if (backendConfig.openaiBaseUrl) subprocessEnv.OPENAI_BASE_URL = backendConfig.openaiBaseUrl;
+      if (backendConfig.openaiModel) subprocessEnv.QUALITY_LOOP_MODEL = backendConfig.openaiModel;
+
+      // OpenAI-compat / ZAI
+      if (backendConfig.openaiCompatApiKey) subprocessEnv.OPENAI_COMPAT_API_KEY = backendConfig.openaiCompatApiKey;
+      if (backendConfig.openaiCompatBaseUrl) subprocessEnv.OPENAI_COMPAT_BASE_URL = backendConfig.openaiCompatBaseUrl;
+      if (backendConfig.openaiCompatModel) subprocessEnv.QUALITY_LOOP_MODEL = subprocessEnv.QUALITY_LOOP_MODEL || backendConfig.openaiCompatModel;
+
+      // OpenCode
+      if (backendConfig.opencodeApiKey) subprocessEnv.OPENCODE_API_KEY = backendConfig.opencodeApiKey;
+      if (backendConfig.opencodeModel) subprocessEnv.OPENCODE_MODEL = backendConfig.opencodeModel;
 
       return new Promise((resolve, reject) => {
         const proc = spawn(pythonBin, args, {

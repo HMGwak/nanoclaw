@@ -24,10 +24,23 @@ class WikiAgent:
     """Generalist agent for wiki content generation."""
 
     def __init__(self, model: str | None = None):
-        api_key = os.environ.get("OPENAI_API_KEY", "")
-        base_url = os.environ.get("OPENAI_BASE_URL") or None
+        backend = os.environ.get("NANOCLAW_AGENT_BACKEND", "openai")
+
+        if backend in ("zai", "openai-compat"):
+            api_key = os.environ.get("OPENAI_COMPAT_API_KEY", "")
+            base_url = os.environ.get("OPENAI_COMPAT_BASE_URL", "https://api.z.ai/api/paas/v4/")
+            default_model = os.environ.get("QUALITY_LOOP_MODEL", "glm-5")
+        elif backend == "openai":
+            api_key = os.environ.get("OPENAI_API_KEY", "")
+            base_url = os.environ.get("OPENAI_BASE_URL") or None
+            default_model = os.environ.get("QUALITY_LOOP_MODEL", "gpt-5.4")
+        else:  # opencode or other
+            api_key = os.environ.get("OPENAI_API_KEY", "") or os.environ.get("OPENCODE_API_KEY", "")
+            base_url = os.environ.get("OPENAI_BASE_URL") or None
+            default_model = os.environ.get("QUALITY_LOOP_MODEL", "gpt-5.4")
+
         self.client = openai.OpenAI(api_key=api_key, base_url=base_url)
-        self.model = model or os.environ.get("QUALITY_LOOP_MODEL", "gpt-5.4")
+        self.model = model or default_model
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
         max_retries = 5
