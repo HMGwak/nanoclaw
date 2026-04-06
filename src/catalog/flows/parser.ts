@@ -1,13 +1,7 @@
 import { WorkflowPlanStep } from '../../types.js';
 import { getFlowSpec } from './registry.js';
 
-const FLOW_ID_ALIASES: Record<string, string> = {
-  'karpathy-loop': 'karpathy-loop',
-  karpathy_loop: 'karpathy-loop',
-  'experiment-loop': 'karpathy-loop',
-  experiment_loop: 'karpathy-loop',
-  'planning-workshop': 'karpathy-loop',
-};
+const FLOW_ID_ALIASES: Record<string, string> = {};
 
 function toStringList(value: unknown): string[] | undefined {
   if (Array.isArray(value)) {

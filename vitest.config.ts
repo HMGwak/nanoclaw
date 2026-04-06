@@ -7,5 +7,6 @@ export default defineConfig({
       'setup/**/*.test.ts',
       'container/agent-runner/src/**/*.test.ts',
     ],
+    exclude: ['src/**/_archived/**'],
   },
 });

@@ -1,0 +1,17 @@
+[project]
+name = "quality-loop"
+version = "0.1.0"
+description = "Universal LLM quality loop engine - evaluate, revise, repeat"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["anthropic>=0.40.0"]
+
+[project.scripts]
+quality-loop = "quality_loop.engine:main"
+
+[tool.uv]
+package = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

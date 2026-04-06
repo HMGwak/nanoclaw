@@ -6,7 +6,6 @@ import {
   listDebateModeSpecs,
   listDebateProtocolSpecs,
 } from '../methods/debate/index.js';
-import { listKarpathyLoopMethodSpecs } from '../methods/karpathy-loop/index.js';
 import { listFlowSpecs } from '../flows/index.js';
 import { listToolsetSpecs } from '../toolsets/index.js';
 import {
@@ -122,14 +121,4 @@ describe('original source manifest registry', () => {
     }
   });
 
-  it('resolves all karpathy-loop method source module references against preserved source manifests', () => {
-    for (const method of listKarpathyLoopMethodSpecs()) {
-      for (const sourceModuleId of method.sourceModuleIds || []) {
-        expect(
-          hasOriginalSourceManifest(sourceModuleId),
-          `Missing preserved source manifest for method ${method.id} -> ${sourceModuleId}`,
-        ).toBe(true);
-      }
-    }
-  });
 });

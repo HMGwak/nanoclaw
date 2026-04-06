@@ -1,9 +1,6 @@
-import { KARPATHY_LOOP_FLOW } from './karpathy-loop.js';
 import { FlowSpec } from './types.js';
 
-const FLOWS: Record<string, FlowSpec> = {
-  [KARPATHY_LOOP_FLOW.id]: KARPATHY_LOOP_FLOW,
-};
+const FLOWS: Record<string, FlowSpec> = {};
 
 export function getFlowSpec(id: string): FlowSpec | null {
   return FLOWS[id] || null;

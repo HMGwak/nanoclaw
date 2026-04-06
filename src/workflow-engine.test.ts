@@ -278,7 +278,7 @@ describe('WorkflowEngine', () => {
       planSteps,
       'discord_planning',
       'dc:1234:planning',
-      'karpathy-loop',
+      'test-flow',
     );
 
     expect(wf.id).toMatch(/^wf-/);
@@ -286,7 +286,7 @@ describe('WorkflowEngine', () => {
     // Check DB state
     const dbWf = getWorkflow(wf.id)!;
     expect(dbWf.status).toBe('awaiting_confirmation');
-    expect(dbWf.flow_id).toBe('karpathy-loop');
+    expect(dbWf.flow_id).toBe('test-flow');
 
     // Check steps created
     const steps = getWorkflowSteps(wf.id);
@@ -332,7 +332,7 @@ describe('WorkflowEngine', () => {
       ],
       'discord_planning',
       'dc:1234:planning',
-      'karpathy-loop',
+      'test-flow',
     );
 
     const steps = getWorkflowSteps(wf.id);
@@ -355,7 +355,7 @@ describe('WorkflowEngine', () => {
       ],
       'discord_planning',
       'dc:1234:planning',
-      'karpathy-loop',
+      'test-flow',
     );
 
     const steps = getWorkflowSteps(wf.id);
@@ -378,7 +378,7 @@ describe('WorkflowEngine', () => {
       ],
       'discord_planning',
       'dc:1234:planning',
-      'karpathy-loop',
+      'test-flow',
     );
 
     const steps = getWorkflowSteps(wf.id);
@@ -436,7 +436,7 @@ describe('WorkflowEngine', () => {
       ],
       'discord_planning',
       'dc:1234:planning',
-      'karpathy-loop',
+      'test-flow',
       { autoStart: true },
     );
 
@@ -472,7 +472,7 @@ describe('WorkflowEngine', () => {
       ],
       'discord_planning',
       'dc:1234:planning',
-      'karpathy-loop',
+      'test-flow',
     );
 
     await engine.confirmWorkflow(wf.id);
@@ -488,7 +488,7 @@ describe('WorkflowEngine', () => {
     // Check step 1 was enqueued
     expect(deps.enqueuedSteps).toHaveLength(1);
     expect(deps.enqueuedSteps[0].groupJid).toBe('dc:1234:planning');
-    expect(deps.enqueuedSteps[0].prompt).toContain('Flow ID: karpathy-loop');
+    expect(deps.enqueuedSteps[0].prompt).toContain('Flow ID: test-flow');
     expect(deps.enqueuedSteps[0].prompt).toContain('Stage ID: change');
     expect(deps.enqueuedSteps[0].prompt).toContain('누적 메모리 요약');
     expect(deps.enqueuedSteps[0].prompt).toContain('Step 1 done');
