@@ -341,6 +341,8 @@ class Evaluator:
 
             ref_content = ""
             for f in reference_files:
+                if not f.exists():
+                    continue
                 ref_content += f"## [REF] {f.name}\n{f.read_text()}\n\n"
 
             system_prompt = (

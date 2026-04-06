@@ -92,6 +92,9 @@ Rules:
 - Do NOT add any content not present in the raw documents (no hallucination).
 - Write concretely so a new team member can perform the same task using only this wiki.
 - Write ALL output in Korean.
+- Use bullet points (- ), numbered lists (1. 2. 3.), and indentation actively to improve readability.
+- Prefer structured lists over long prose paragraphs. Break down complex information into scannable bullet points.
+- Use indented sub-items (tab + -) for hierarchical details.
 """
 
 _DEFAULT_STRUCTURE = [
@@ -125,6 +128,8 @@ def _build_reduce_system_prompt(doc_structure: list[str] | None = None) -> str:
         lines.append("- Headings marked with {국가} MUST be repeated for EACH country found in the raw documents.")
         lines.append("- Replace {국가} with the actual country name (e.g. ### 대만, ### 러시아, ### 나이지리아).")
         lines.append("- Under each country heading, include: 절차, 필수 서류, 주요 사례 as bullet points or sub-content.")
+        lines.append("- PMI and PMIzhora are NOT countries — they are partner organizations. Treat them as SEPARATE headings (e.g. ### PMI, ### PMIzhora) distinct from country headings.")
+        lines.append("- If a document involves both a country AND PMI/PMIzhora, place country-specific content under the country heading and PMI/PMIzhora coordination content under the respective partner heading.")
 
     structure_block = "\n".join(lines)
     return _REDUCE_SYSTEM_BASE.format(structure_block=structure_block)

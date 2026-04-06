@@ -62,7 +62,7 @@ logger = logging.getLogger(__name__)
 
 # ── Local Gemma ──────────────────────────────────────────────────
 GEMMA_SCRIPT = Path.home() / "Automation" / "local_llm_model" / "run_local_gemma.sh"
-GEMMA_MODELS = {"gemma4-26b": "26b", "gemma4-e4b": "e4b"}
+GEMMA_MODELS = {"gemma4-26b": "26b", "gemma4-e4b": "e4b", "qwen3.5-9b": "qwen"}
 
 
 class LocalGemmaAgent:
