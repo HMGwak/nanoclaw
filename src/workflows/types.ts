@@ -1,6 +1,24 @@
 import { RegisteredGroup, WorkflowPlanStep } from '../types.js';
 import { WorkflowRepository } from '../storage/workflows.js';
 
+export interface QualityLoopParams {
+  task: string;
+  rubricPath: string;
+  inputFiles: string[];
+  referenceFiles: string[];
+  outputDir: string;
+  model?: string;
+}
+
+export interface QualityLoopResult {
+  status: string;
+  finalScore: number | null;
+  outputFiles: string[];
+  runId: string;
+  error?: string;
+  history: Array<{ iteration: number; total: number; verdict: string }>;
+}
+
 export interface WorkflowEngineDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
@@ -12,6 +30,10 @@ export interface WorkflowEngineDeps {
     workflowContext: WorkflowStepContext,
   ) => void;
   closeStdin: (groupJid: string) => void;
+  executeQualityLoop?: (
+    params: QualityLoopParams,
+    onProgress: (message: string) => void,
+  ) => Promise<QualityLoopResult>;
 }
 
 export interface WorkflowStepContext {

@@ -18,7 +18,7 @@ import {
   formatWorkflowMemorySummary,
   readWorkflowStageMemoryRecords,
 } from './memory.js';
-import { WorkflowEngineDeps } from './types.js';
+import { QualityLoopParams, WorkflowEngineDeps } from './types.js';
 
 function normalizeKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, '');
@@ -118,6 +118,10 @@ export class WorkflowEngine {
   ): Promise<WorkflowRun> {
     const groups = this.deps.registeredGroups();
     const normalizedSteps = planSteps.map((step) => {
+      // Quality-loop steps use source group as assignee (no container dispatch)
+      if (hasQualityLoopConfigFromPlanStep(step)) {
+        return { ...step, assignee: sourceGroupFolder };
+      }
       const assigneeFolder = resolveAssigneeFolder(step.assignee, groups);
       if (!assigneeFolder) {
         const allowed = Object.values(groups)
@@ -539,6 +543,22 @@ export class WorkflowEngine {
     step: WorkflowStepRun,
     previousResult?: string,
   ): Promise<void> {
+    const workflow = this.repository.getWorkflow(workflowId);
+    if (!workflow) {
+      logger.warn(
+        { workflowId, stepId: step.id },
+        'Cannot start step: workflow not found',
+      );
+      return;
+    }
+
+    // Quality-loop: detect from step config (any flow's step can use it)
+    if (hasQualityLoopConfig(step) && this.deps.executeQualityLoop) {
+      await this.executeQualityLoopStep(workflowId, workflow, step);
+      return;
+    }
+
+    // Container-based execution path (unchanged)
     const activeCount = this.repository.getActiveWorkflowContainerCount();
     if (activeCount >= MAX_WORKFLOW_CONTAINERS) {
       logger.info(
@@ -546,15 +566,6 @@ export class WorkflowEngine {
         'Workflow container limit reached, queuing step',
       );
       this.pendingStepQueue.push({ workflowId, stepId: step.id });
-      return;
-    }
-
-    const workflow = this.repository.getWorkflow(workflowId);
-    if (!workflow) {
-      logger.warn(
-        { workflowId, stepId: step.id },
-        'Cannot start step: workflow not found',
-      );
       return;
     }
 
@@ -610,4 +621,155 @@ export class WorkflowEngine {
       'Workflow step enqueued',
     );
   }
+
+  private async executeQualityLoopStep(
+    workflowId: string,
+    workflow: WorkflowRun,
+    step: WorkflowStepRun,
+  ): Promise<void> {
+    const steps = this.repository.getWorkflowSteps(workflowId);
+
+    this.repository.updateWorkflowStep(step.id, { status: 'running' });
+
+    const params = parseQualityLoopConfig(step, workflowId);
+
+    await this.deps.sendMessage(
+      workflow.source_chat_jid,
+      `워크플로우 **${workflow.title}**: Quality Loop 시작 ` +
+        `(Step ${step.step_index + 1}/${steps.length})\n목표: ${step.goal}`,
+    );
+
+    logger.info(
+      { workflowId, stepId: step.id, params },
+      'Quality loop step started',
+    );
+
+    try {
+      const result = await this.deps.executeQualityLoop!(params, (msg) => {
+        this.deps.sendMessage(workflow.source_chat_jid, msg).catch(() => {});
+      });
+
+      const isSuccess = ['keep', 'converged', 'max_iterations'].includes(
+        result.status,
+      );
+      const summary =
+        `Quality Loop ${result.status}: score=${result.finalScore}, ` +
+        `iterations=${result.history.length}, run_id=${result.runId}`;
+
+      appendWorkflowStageMemoryRecord(
+        workflow.source_group_folder,
+        workflowId,
+        {
+          timestamp: new Date().toISOString(),
+          workflow_id: workflowId,
+          flow_id: workflow.flow_id,
+          step_id: step.id,
+          step_index: step.step_index,
+          stage_id: step.stage_id,
+          assignee_group_folder: step.assignee_group_folder,
+          status: isSuccess ? 'completed' : 'failed',
+          result_summary: summary,
+        },
+      );
+
+      if (isSuccess) {
+        await this.onStepCompleted(workflowId, step.step_index, summary);
+      } else {
+        await this.onStepFailed(
+          workflowId,
+          step.step_index,
+          result.error || `Quality loop: ${result.status}`,
+        );
+      }
+    } catch (err) {
+      logger.error(
+        { workflowId, stepId: step.id, error: String(err) },
+        'Quality loop subprocess error',
+      );
+      await this.onStepFailed(
+        workflowId,
+        step.step_index,
+        `Quality loop subprocess error: ${err}`,
+      );
+    }
+  }
+}
+
+function parseQualityLoopConfig(
+  step: WorkflowStepRun,
+  workflowId: string,
+): QualityLoopParams {
+  const criteria: string[] = step.acceptance_criteria
+    ? JSON.parse(step.acceptance_criteria)
+    : [];
+  const configStr = criteria.find((c) => c.startsWith('{'));
+  const config = configStr
+    ? (JSON.parse(configStr) as Record<string, unknown>)
+    : {};
+
+  const toStringArray = (val: unknown): string[] => {
+    if (!val) return [];
+    if (typeof val === 'string') return [val];
+    if (Array.isArray(val)) return val.filter((v) => typeof v === 'string');
+    return [];
+  };
+
+  return {
+    task: (config.task as string) || 'wiki_task.WikiTask',
+    rubricPath: (config.rubric as string) || '',
+    inputFiles: toStringArray(config.input),
+    referenceFiles: toStringArray(config.reference),
+    outputDir:
+      (config.output as string) || `data/workflows/${workflowId}/quality-loop`,
+    model: config.model as string | undefined,
+  };
+}
+
+function extractQualityLoopJson(
+  criteriaRaw: string | string[] | null | undefined,
+): Record<string, unknown> | null {
+  if (!criteriaRaw) return null;
+  const items: string[] =
+    typeof criteriaRaw === 'string'
+      ? (() => {
+          try {
+            return JSON.parse(criteriaRaw);
+          } catch {
+            return [];
+          }
+        })()
+      : criteriaRaw;
+  if (!Array.isArray(items)) return null;
+  const jsonStr = items.find(
+    (c) => typeof c === 'string' && c.trimStart().startsWith('{'),
+  );
+  if (!jsonStr) return null;
+  try {
+    const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+    if (parsed.task && parsed.rubric) return parsed;
+  } catch {
+    // not valid JSON
+  }
+  return null;
+}
+
+function hasQualityLoopConfig(step: WorkflowStepRun): boolean {
+  return extractQualityLoopJson(step.acceptance_criteria) !== null;
+}
+
+function hasQualityLoopConfigFromPlanStep(step: {
+  acceptance_criteria?: string[] | string | null;
+}): boolean {
+  const criteria = step.acceptance_criteria;
+  if (!criteria) return false;
+  const items = Array.isArray(criteria) ? criteria : [criteria];
+  return items.some((c) => {
+    if (typeof c !== 'string' || !c.trimStart().startsWith('{')) return false;
+    try {
+      const parsed = JSON.parse(c) as Record<string, unknown>;
+      return Boolean(parsed.task && parsed.rubric);
+    } catch {
+      return false;
+    }
+  });
 }

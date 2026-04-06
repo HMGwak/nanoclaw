@@ -1,3 +1,4 @@
+import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -975,6 +976,94 @@ async function main(): Promise<void> {
     },
     closeStdin: (groupJid: string) => {
       queue.closeStdin(groupJid);
+    },
+    executeQualityLoop: async (params, onProgress) => {
+      const enginePath = path.resolve(
+        __dirname,
+        '..',
+        'src',
+        'catalog',
+        'methods',
+        'karpathy-loop',
+        'engine.py',
+      );
+      const pythonBin =
+        process.env.QUALITY_LOOP_PYTHON ||
+        path.resolve(__dirname, '..', '.venv', 'bin', 'python');
+
+      const args = [
+        enginePath,
+        '--task',
+        params.task,
+        '--rubric',
+        params.rubricPath,
+        '--output',
+        params.outputDir,
+      ];
+      for (const f of params.inputFiles) {
+        args.push('--input', f);
+      }
+      for (const f of params.referenceFiles) {
+        args.push('--reference', f);
+      }
+      if (params.model) {
+        args.push('--model', params.model);
+      }
+
+      fs.mkdirSync(params.outputDir, { recursive: true });
+
+      return new Promise((resolve, reject) => {
+        const proc = spawn(pythonBin, args, {
+          cwd: path.resolve(__dirname, '..'),
+          env: { ...process.env },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        let stderr = '';
+        proc.stderr?.on('data', (chunk: Buffer) => {
+          const text = chunk.toString();
+          stderr += text;
+          for (const line of text.split('\n')) {
+            if (line.includes('PROGRESS')) {
+              onProgress(line.replace(/.*PROGRESS\s*/, '').trim());
+            }
+          }
+        });
+
+        proc.on('close', (code) => {
+          const reportPath = path.join(params.outputDir, 'report.json');
+          try {
+            const raw = fs.readFileSync(reportPath, 'utf-8');
+            const report = JSON.parse(raw);
+            resolve({
+              status: report.status,
+              finalScore: report.final_score ?? null,
+              outputFiles: report.output_files || [],
+              runId: report.run_id,
+              error: report.error,
+              history: (report.history || []).map(
+                (h: { iteration: number; total: number; verdict: string }) => ({
+                  iteration: h.iteration,
+                  total: h.total,
+                  verdict: h.verdict,
+                }),
+              ),
+            });
+          } catch {
+            reject(
+              new Error(
+                `Quality loop failed (exit ${code}): ${stderr.slice(-500)}`,
+              ),
+            );
+          }
+        });
+
+        proc.on('error', (err) => {
+          reject(
+            new Error(`Failed to spawn quality loop process: ${err.message}`),
+          );
+        });
+      });
     },
   });
 

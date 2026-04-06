@@ -150,28 +150,6 @@ export function handleDiscordWorkflowStart(
       error: 'start_workflow requires non-empty title and steps',
     };
   }
-  if (
-    Object.prototype.hasOwnProperty.call(
-      data as unknown as Record<string, unknown>,
-      'flow_id',
-    ) ||
-    Object.prototype.hasOwnProperty.call(
-      data as unknown as Record<string, unknown>,
-      'flowId',
-    )
-  ) {
-    logger.warn(
-      { sourceGroup },
-      'Invalid start_workflow request - flow_id is no longer accepted',
-    );
-    return {
-      ok: false,
-      reason: 'invalid_payload',
-      error:
-        'flow_id is no longer accepted; start_workflow always uses karpathy-loop',
-    };
-  }
-
   for (let i = 0; i < data.steps.length; i++) {
     const stepError = validateWorkflowStep(data.steps[i], i);
     if (stepError) {

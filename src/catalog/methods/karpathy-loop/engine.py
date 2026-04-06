@@ -471,6 +471,8 @@ def run_loop(
                 error="Loop cancelled by caller",
             )
 
+        logger.info("PROGRESS iteration=%d started", iteration)
+
         if callbacks is not None:
             try:
                 callbacks.on_iteration_start(iteration)
@@ -587,6 +589,12 @@ def run_loop(
         record.verdict = "revise"
         history.append(record)
         _notify_verdict(callbacks, iteration, "revise", eval_output.total)
+        logger.info(
+            "PROGRESS iteration=%d verdict=%s score=%.1f",
+            iteration, record.verdict, eval_output.total,
+        )
+        # Incremental report write (crash resilience)
+        _write_incremental_report(output_dir, history, run_id)
         prev_score = eval_output.total
 
     # Finalize output
@@ -620,6 +628,11 @@ def run_loop(
         history=history,
         run_id=run_id,
         error=final.error if final else None,
+    )
+
+    logger.info(
+        "PROGRESS complete status=%s score=%s",
+        report.status, report.final_score,
     )
 
     # Write report.json
@@ -666,6 +679,25 @@ def _write_report(path: Path, report: LoopReport) -> None:
 
     data = _serialize(report)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def _write_incremental_report(
+    output_dir: Path,
+    history: list[IterationRecord],
+    run_id: str,
+) -> None:
+    """Write partial report after each iteration for crash resilience."""
+    partial = LoopReport(
+        status="in_progress",
+        final_score=history[-1].total if history else None,
+        output_files=[],
+        history=history,
+        run_id=run_id,
+    )
+    try:
+        _write_report(output_dir / "report.json", partial)
+    except Exception:
+        logger.warning("Failed to write incremental report")
 
 
 # ── CLI ───────────────────────────────────────────────────────────
