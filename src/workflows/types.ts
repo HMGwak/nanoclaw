@@ -8,6 +8,10 @@ export interface QualityLoopParams {
   referenceFiles: string[];
   outputDir: string;
   model?: string;
+  domain?: string;
+  vaultRoot?: string;
+  basePath?: string;
+  filter?: string;
 }
 
 export interface QualityLoopResult {

@@ -453,12 +453,15 @@ def run_loop(
     agents: AgentsProtocol,
     output_dir: Path,
     callbacks: LoopCallbacks | None = None,
+    context_config: dict | None = None,
 ) -> LoopReport:
     """Main quality loop entry point."""
     run_id = str(uuid.uuid4())
     cancellation = CancellationToken()
 
     rubric = RubricParser.parse(rubric_path)
+    if context_config:
+        rubric.extra_config.update(context_config)
     evaluator = Evaluator(rubric, agents)
 
     context = Context(
@@ -768,6 +771,28 @@ def main():
         default="gpt-5.4",
         help="LLM model to use (default: gpt-5.4)",
     )
+    parser.add_argument(
+        "--domain",
+        default=None,
+        help="Domain name (e.g. '안전성검토')",
+    )
+    parser.add_argument(
+        "--vault-root",
+        type=Path,
+        default=None,
+        help="Vault root path",
+    )
+    parser.add_argument(
+        "--filter",
+        default=None,
+        help="Wildcard filter pattern (e.g. '(안전성검토)_*.md')",
+    )
+    parser.add_argument(
+        "--base",
+        type=Path,
+        default=None,
+        help="Path to .base index file",
+    )
 
     args = parser.parse_args()
 
@@ -787,6 +812,16 @@ def main():
 
     agents = OpenAIAgents(model=args.model)
 
+    context_config: dict = {}
+    if args.domain is not None:
+        context_config["domain"] = args.domain
+    if args.vault_root is not None:
+        context_config["vault_root"] = args.vault_root
+    if args.filter is not None:
+        context_config["filter"] = args.filter
+    if args.base is not None:
+        context_config["base"] = args.base
+
     report = run_loop(
         task=task,
         rubric_path=args.rubric,
@@ -794,6 +829,7 @@ def main():
         reference_files=reference_files,
         agents=agents,
         output_dir=args.output,
+        context_config=context_config,
     )
 
     logger.info("Loop completed: status=%s, score=%s", report.status, report.final_score)

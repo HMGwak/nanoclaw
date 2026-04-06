@@ -12,10 +12,15 @@ import json
 import logging
 import os
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import openai
+
+from .base_index import BaseIndexParser
+from .synthesizer import ChunkedSynthesizer
+from .wiki_tracker import WikiTracker
 
 
 @dataclass
@@ -166,10 +171,46 @@ class WikiTask:
     def __init__(self):
         self.agent = WikiAgent()
 
-    def run(self, context) -> dict:
-        """Generate wiki notes from input files."""
-        # RunResult defined at module level
+    def run(self, context) -> RunResult:
+        """Dispatch to synthesis or legacy mode based on context.config."""
+        if context.config.get("domain"):
+            return self._run_synthesis(context)
+        return self._run_legacy(context)
 
+    def _run_synthesis(self, context) -> RunResult:
+        """N:1 synthesis mode: discover → classify → synthesize → save."""
+        domain = context.config["domain"]
+        base_path = Path(context.config.get("base_path", ""))
+        vault_root = Path(context.config.get("vault_root", ""))
+        filter_pattern = context.config.get("filter")
+
+        # 1. Discover inputs
+        parser = BaseIndexParser(vault_root)
+        all_docs = parser.discover(base_path, filter_pattern=filter_pattern)
+
+        # 2. Track changes
+        tracker = WikiTracker()
+        new, changed, unchanged = tracker.classify_docs(all_docs)
+
+        # 3. Synthesize
+        synthesizer = ChunkedSynthesizer(self.agent)
+        existing_wiki = self._load_existing_wiki(context.reference_files, domain)
+        docs_to_process = new + changed
+        wiki_content = synthesizer.synthesize(docs_to_process, existing_wiki, domain)
+
+        # 4. Save + track
+        context.output_dir.mkdir(parents=True, exist_ok=True)
+        out_path = context.output_dir / f"{domain}.md"
+        out_path.write_text(wiki_content, encoding="utf-8")
+
+        run_id = getattr(context, "run_id", str(uuid.uuid4()))
+        tracker.record_run(run_id, domain, str(base_path), filter_pattern, all_docs, {})
+        tracker.complete_run(run_id, output_count=1)
+
+        return RunResult(output_files=[out_path])
+
+    def _run_legacy(self, context) -> RunResult:
+        """Original 1:1 doc → wiki note mode."""
         output_files: list[Path] = []
 
         for doc_path in context.input_files:
@@ -222,11 +263,26 @@ class WikiTask:
 
         return RunResult(output_files=output_files)
 
-    def revise(self, context, feedback) -> dict:
+    def revise(self, context, feedback) -> RunResult:
         """Revise wiki notes based on quality-loop feedback."""
-        # RunResult defined at module level
-
         output_files: list[Path] = []
+
+        if context.config.get("domain"):
+            # Synthesis mode: re-synthesize with existing wiki as base
+            domain = context.config["domain"]
+            for prev_file in feedback.previous_output_files:
+                existing_wiki = prev_file.read_text(encoding="utf-8")
+                revision_prompt = self._build_revision_prompt(
+                    existing_wiki, feedback, context.reference_files
+                )
+                revised = self.agent.generate(
+                    system_prompt=REVISE_SYSTEM_PROMPT,
+                    user_prompt=revision_prompt,
+                )
+                out_path = context.output_dir / prev_file.name
+                out_path.write_text(revised, encoding="utf-8")
+                output_files.append(out_path)
+            return RunResult(output_files=output_files)
 
         for prev_file in feedback.previous_output_files:
             prev_content = prev_file.read_text(encoding="utf-8")
@@ -245,6 +301,13 @@ class WikiTask:
             output_files.append(out_path)
 
         return RunResult(output_files=output_files)
+
+    def _load_existing_wiki(self, reference_files: list[Path], domain: str) -> str | None:
+        """Find and return the existing wiki note for domain, or None."""
+        for ref in reference_files:
+            if ref.stem == domain and ref.suffix == ".md":
+                return ref.read_text(encoding="utf-8")
+        return None
 
     def _build_wiki_index(self, reference_files: list[Path]) -> str:
         lines: list[str] = []

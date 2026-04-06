@@ -722,6 +722,10 @@ function parseQualityLoopConfig(
     outputDir:
       (config.output as string) || `data/workflows/${workflowId}/quality-loop`,
     model: config.model as string | undefined,
+    domain: config.domain as string | undefined,
+    vaultRoot: config.vault_root as string | undefined,
+    basePath: config.base as string | undefined,
+    filter: config.filter as string | undefined,
   };
 }
 

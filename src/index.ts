@@ -1011,6 +1011,18 @@ async function main(): Promise<void> {
       if (params.model) {
         args.push('--model', params.model);
       }
+      if (params.domain) {
+        args.push('--domain', params.domain);
+      }
+      if (params.vaultRoot) {
+        args.push('--vault-root', params.vaultRoot);
+      }
+      if (params.basePath) {
+        args.push('--base', params.basePath);
+      }
+      if (params.filter) {
+        args.push('--filter', params.filter);
+      }
 
       fs.mkdirSync(params.outputDir, { recursive: true });
 
