@@ -52,7 +52,7 @@ report = run_loop(
         "base_path": str(BASE_PATH),
         "vault_root": str(VAULT),
         "filter": "(안전성검토)_*.md",
-        "max_docs": 150,  # 5 batches × 30 docs (gpt-5.4)
+        "max_docs": 30,  # 1 batch for quick structure test
     },
 )
 

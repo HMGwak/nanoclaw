@@ -165,79 +165,81 @@ class WikiAgent:
 # ── System Prompts ───────────────────────────────────────────────
 
 MATCH_SYSTEM_PROMPT = """\
-당신은 wiki 매칭 전문가입니다.
-주어진 raw 문서와 기존 wiki 목록을 비교하여, 이 문서가 기존 wiki를 업데이트해야 하는지, \
-새로운 wiki를 생성해야 하는지 판단합니다.
+You are a wiki matching specialist.
+Compare the given raw document against the existing wiki list and decide whether to update an existing wiki or create a new one.
 
-반드시 JSON으로만 응답하세요:
-- 새 wiki 생성: {"action": "create", "title": "wiki 제목"}
-- 기존 wiki 업데이트: {"action": "update", "target_wiki": "기존_wiki_파일명.md", "title": "wiki 제목"}
+Respond ONLY with JSON:
+- New wiki: {"action": "create", "title": "wiki title"}
+- Update existing: {"action": "update", "target_wiki": "existing_wiki_filename.md", "title": "wiki title"}
 """
 
 CREATE_SYSTEM_PROMPT = """\
-당신은 전문 wiki 작성자입니다.
-raw 문서를 분석하여 구조화된 wiki note를 작성합니다.
+You are an expert wiki author.
+Analyze the raw document and produce a structured wiki note.
 
-규칙:
-1. 모든 서술 문장에 raw 출처 각주([^출처명])를 달 것
-2. 최소 3개 국가/지역 섹션을 포함할 것
-3. 최소 3개 대표 사례/예시를 포함할 것
-4. raw 문서에 없는 내용을 추가하지 말 것
-5. YAML frontmatter에 태그, 생성일, 출처를 포함할 것
-6. 신규 담당자가 업무를 수행할 수 있도록 절차와 기준을 구체적으로 작성할 것
+Rules:
+1. Every factual sentence MUST have a raw source footnote ([^source]).
+2. Include at least 3 country/region sections.
+3. Include at least 3 representative cases/examples.
+4. Do NOT add any content not present in the raw documents.
+5. Include YAML frontmatter with tags, created date.
+6. Write concretely so a new team member can perform the same task.
+7. Write ALL output in Korean.
 """
 
 UPDATE_SYSTEM_PROMPT = """\
-당신은 전문 wiki 업데이트 작성자입니다.
-기존 wiki note에 새 raw 문서의 정보를 통합합니다.
+You are an expert wiki update author.
+Integrate new raw document information into the existing wiki note.
 
-규칙:
-1. 기존 wiki의 구조와 톤을 유지할 것
-2. 새 정보를 적절한 섹션에 통합할 것
-3. 모든 새 서술 문장에 raw 출처 각주를 달 것
-4. 기존 각주를 유지하고 새 각주를 추가할 것
-5. raw 문서에 없는 내용을 추가하지 말 것
-6. 중복 내용을 제거하고 최신 정보로 갱신할 것
+Rules:
+1. Preserve the existing wiki's structure and tone.
+2. Integrate new information into the appropriate sections.
+3. Every new factual sentence MUST have a raw source footnote.
+4. Keep existing footnotes and add new ones.
+5. Do NOT add any content not present in the raw documents.
+6. Remove duplicates and update with the latest information.
+7. Write ALL output in Korean.
 """
 
 REVISE_BASE_INSTRUCTIONS = """\
-당신은 wiki 품질 개선 전문가입니다.
-피드백을 반영하여 wiki note의 특정 부분만 수정합니다.
+You are a wiki quality improvement specialist.
+Apply feedback to revise ONLY the specific parts of the wiki note that need improvement.
 
-규칙:
-1. 전체 문서를 다시 작성하지 말 것 — 수정이 필요한 부분만 diff로 수정할 것
-2. raw 문서에 없는 내용을 절대 추가하지 말 것 (hallucination 금지)
-3. 각 개선 사항에 대해 raw 출처 각주를 반드시 달 것
+Rules:
+1. Do NOT rewrite the entire document — only produce diffs for sections that need changes.
+2. Do NOT add any content not present in the raw documents (no hallucination).
+3. Every improvement MUST include a raw source footnote citation.
 
-기존 wiki가 JSON 노드 배열로 제공됩니다. 각 노드는 {id, type, content, parent, indent}를 가집니다.
+The existing wiki is provided as a JSON node array. Each node has {id, type, content, parent, indent}.
 
-수정 방식 (JSON 배열):
+Respond ONLY with a JSON array of diffs:
 [
-  {"action": "update", "id": 3, "content": "수정된 내용"},
-  {"action": "insert_after", "id": 7, "type": "paragraph", "parent": 2, "content": "새 문단"},
-  {"action": "append_child", "parent": 5, "type": "list", "indent": 0, "content": "새 항목[^4]"},
+  {"action": "update", "id": 3, "content": "revised content"},
+  {"action": "insert_after", "id": 7, "type": "paragraph", "parent": 2, "content": "new paragraph"},
+  {"action": "append_child", "parent": 5, "type": "list", "indent": 0, "content": "new item[^4]"},
   {"action": "delete", "id": 10}
 ]
 
-규칙:
-- id로 정확한 노드 지정 (줄번호나 텍스트 매칭 아님)
-- 변경이 필요한 부분만 diff로 제시
-- 기존 구조를 최대한 유지
+Rules:
+- Target nodes by id (NOT by line number or text matching).
+- Only include diffs for parts that need changes.
+- Preserve existing structure as much as possible.
+- Write ALL content values in Korean.
 """
 
 REVISE_SYSTEM_PROMPT_IMPROVE = REVISE_BASE_INSTRUCTIONS + """\
-현재 목표: 약한 영역 개선
-점수가 낮은 항목부터 순서대로 개선하여 품질을 높이세요.
+Current goal: Improve weak areas.
+Improve items in order from lowest score to highest to raise overall quality.
 """
 
 REVISE_SYSTEM_PROMPT_FIX_GATE = REVISE_BASE_INSTRUCTIONS + """\
-현재 목표: 하드 게이트 통과
-실패한 게이트 항목을 최우선으로 해결하세요. 최소한의 수정으로 요구사항을 충족하세요.
+Current goal: Pass hard gates.
+Fix failed gate items first. Use minimal changes to meet the requirements.
 """
 
 REVISE_SYSTEM_PROMPT_RECOVERY = REVISE_BASE_INSTRUCTIONS + """\
-현재 목표: 점수 하락 복구
-이전 수정에서 점수가 떨어졌습니다. 피드백을 더 엄격하게 분석하여 다른 방식으로 접근하세요.
+Current goal: Recover from score drop.
+The previous revision caused a score decrease. Analyze the feedback more carefully and take a different approach.
 """
 
 
@@ -281,7 +283,8 @@ class WikiTask:
         new, changed, unchanged = tracker.classify_docs(all_docs)
 
         # 3. Synthesize
-        synthesizer = ChunkedSynthesizer(self.agent)
+        doc_structure = context.config.get("doc_structure")
+        synthesizer = ChunkedSynthesizer(self.agent, doc_structure=doc_structure)
         existing_wiki = self._load_existing_wiki(context.reference_files, domain)
         docs_to_process = new + changed
         wiki_content = synthesizer.synthesize(docs_to_process, existing_wiki, domain)

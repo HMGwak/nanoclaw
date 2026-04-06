@@ -58,71 +58,82 @@ logger = logging.getLogger(__name__)
 # ── Prompts ───────────────────────────────────────────────────────
 
 MAP_SYSTEM_PROMPT = """\
-당신은 raw 업무 문서에서 반복 패턴을 추출하는 전문가입니다.
-주어진 raw 문서 묶음을 분석하여 아래 구조의 JSON으로만 응답하세요.
+You are an expert at extracting recurring patterns from raw work documents.
+Analyze the given batch of raw documents and respond ONLY with a JSON object in the following structure.
 
 {
-  "반복_입력자료": ["항목1", "항목2", ...],
-  "반복_산출물": ["항목1", "항목2", ...],
-  "절차_단계": ["1. 단계", "2. 단계", ...],
+  "반복_입력자료": ["item1", "item2", ...],
+  "반복_산출물": ["item1", "item2", ...],
+  "절차_단계": ["1. step", "2. step", ...],
   "사례별_특이점": [
-    {"사례": "파일명 또는 사례 식별자", "특이사항": "설명"}
+    {"사례": "filename or case identifier", "특이사항": "description"}
   ],
-  "주요_키워드": ["키워드1", "키워드2", ...]
+  "주요_키워드": ["keyword1", "keyword2", ...]
 }
 
-규칙:
-- JSON 외 다른 텍스트를 출력하지 말 것
-- raw 문서에 없는 내용을 추가하지 말 것 (hallucination 금지)
-- 반복적으로 등장하는 패턴을 우선 추출할 것
+Rules:
+- Output ONLY valid JSON. No other text.
+- Do NOT add any content not present in the raw documents (no hallucination).
+- Prioritize patterns that appear repeatedly across documents.
+- Write all extracted values in Korean, matching the original document language.
 """
 
-REDUCE_SYSTEM_PROMPT = """\
-당신은 전문 wiki 작성자입니다.
-여러 배치에서 추출한 패턴 JSON들을 종합하여 구조화된 wiki note를 작성합니다.
+_REDUCE_SYSTEM_BASE = """\
+You are an expert wiki author. Synthesize the extracted pattern JSONs from multiple batches into a structured wiki note.
 
-wiki note 형식:
-1. YAML frontmatter (tags, created, domain, sources 포함)
-2. ## 핵심 성격
-3. ## 반복 패턴
-   - ### 반복 입력자료
-   - ### 반복 산출물
-4. ## 절차
-5. ## 대표 사례 (최소 3개, 각 사례에 각주 참조)
-6. ## 열린 이슈 (불확실하거나 추가 확인이 필요한 항목)
-7. 각주 섹션 (raw 문서 파일명 기반)
+{structure_block}
 
-규칙:
-- 각주는 Obsidian 표준 형식을 사용할 것:
-  - 본문: [^1][^2] (숫자 기반, 짧게)
-  - 문서 하단 ## 각주 섹션에 정의: [^1]: [[(안전성검토)_파일명]]
-  - 각주 정의에서 .md 확장자는 제거할 것
-- 모든 서술 문장에 각주를 달 것
-- raw 데이터에 없는 내용을 추가하지 말 것 (hallucination 금지)
-- 신규 담당자가 업무를 수행할 수 있도록 절차와 기준을 구체적으로 작성할 것
-- 한국어로 작성할 것
+Rules:
+- Use Obsidian-standard footnotes:
+  - In-text: [^1][^2] (numeric, short)
+  - At bottom in ## 각주 section: [^1]: [[(filename)]]
+  - Omit .md extension from footnote definitions
+- Every factual sentence MUST have at least one footnote citation.
+- Do NOT add any content not present in the raw documents (no hallucination).
+- Write concretely so a new team member can perform the same task using only this wiki.
+- Write ALL output in Korean.
 """
 
-UPDATE_REDUCE_SYSTEM_PROMPT = """\
-당신은 전문 wiki 업데이트 작성자입니다.
-기존 wiki가 JSON 노드 배열로 제공됩니다. 각 노드는 id, type, content, parent, indent를 가집니다.
-
-수정 방식 (JSON 배열):
-[
-  {"action": "update", "id": 3, "content": "새 내용"},
-  {"action": "insert_after", "id": 7, "type": "list", "parent": 5, "indent": 1, "content": "추가 항목"},
-  {"action": "delete", "id": 10},
-  {"action": "append_child", "parent": 4, "type": "list", "indent": 0, "content": "새 목록 항목"}
+_DEFAULT_STRUCTURE = [
+    "## 핵심 성격",
+    "## 반복 패턴",
+    "### 반복 입력자료",
+    "### 반복 산출물",
+    "## 절차",
+    "## 대표 사례 (최소 3개, 각 사례에 각주 참조)",
+    "## 열린 이슈 (불확실하거나 추가 확인이 필요한 항목)",
 ]
 
-규칙:
-- id로 정확한 위치 지정 (줄번호나 텍스트 매칭 아님)
-- 새 노드 추가 시 type과 parent 필수
-- 각주는 type="footnote_def", ref=번호로 추가
-- 기존 내용을 유지하면서 새 정보만 추가/수정
-- 각주 번호는 기존 번호에 이어지도록 매길 것. Obsidian 표준 형식: 본문 [^1], 하단 [^1]: [[(파일명)]]
-- 중복 내용을 제거하고 최신 정보로 갱신할 것
-- 한국어로 작성할 것
+
+def _build_reduce_system_prompt(doc_structure: list[str] | None = None) -> str:
+    headings = doc_structure or _DEFAULT_STRUCTURE
+    lines = ["wiki note 형식:", "1. YAML frontmatter (tags, created, domain 포함)"]
+    for i, h in enumerate(headings, 2):
+        lines.append(f"{i}. {h}")
+    lines.append(f"{len(headings) + 2}. 각주 섹션 (raw 문서 파일명 기반)")
+    structure_block = "\n".join(lines)
+    return _REDUCE_SYSTEM_BASE.format(structure_block=structure_block)
+
+UPDATE_REDUCE_SYSTEM_PROMPT = """\
+You are an expert wiki update author.
+The existing wiki is provided as a JSON node array. Each node has: id, type, content, parent, indent.
+
+Respond ONLY with a JSON array of diffs:
+[
+  {"action": "update", "id": 3, "content": "new content"},
+  {"action": "insert_after", "id": 7, "type": "list", "parent": 5, "indent": 1, "content": "added item"},
+  {"action": "delete", "id": 10},
+  {"action": "append_child", "parent": 4, "type": "list", "indent": 0, "content": "new list item"}
+]
+
+Rules:
+- Target nodes by id (NOT by line number or text matching).
+- When adding nodes: type and parent are required.
+- Footnotes: use type="footnote_def", ref=number.
+- Preserve existing content; only add/modify with new information.
+- Continue footnote numbering from the highest existing number. Obsidian format: in-text [^1], bottom [^1]: [[(filename)]].
+- Remove duplicates and update with the latest information.
+- Write ALL content values in Korean.
 """
 
 
@@ -137,9 +148,10 @@ class ChunkedSynthesizer:
         batch_size: Number of documents processed per map step.
     """
 
-    def __init__(self, agent, batch_size: int = 10) -> None:
+    def __init__(self, agent, batch_size: int = 10, doc_structure: list[str] | None = None) -> None:
         self.agent = agent
-        
+        self.doc_structure = doc_structure
+
         # Adaptive batch size based on model
         model_name = getattr(agent, "model", "").lower()
         if "e4b" in model_name:
@@ -259,8 +271,9 @@ class ChunkedSynthesizer:
     ) -> str:
         """Reduce extractions into a new wiki note."""
         user_prompt = self._build_reduce_user_prompt(extractions, docs, domain)
+        system_prompt = _build_reduce_system_prompt(self.doc_structure)
         return self.agent.generate(
-            system_prompt=REDUCE_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             user_prompt=user_prompt,
         )
 

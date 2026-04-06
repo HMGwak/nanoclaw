@@ -121,6 +121,9 @@ class RubricParser:
             )
 
         extra_config = {}
+        doc_structure = cls._parse_doc_structure(text)
+        if doc_structure:
+            extra_config["doc_structure"] = doc_structure
         return ParsedRubric(config=config, items=items, extra_config=extra_config)
 
     @classmethod
@@ -236,6 +239,19 @@ class RubricParser:
         pattern = rf"- \*\*{field_name}\*\*:\s*(.+)"
         m = re.search(pattern, text)
         return m.group(1).strip() if m else ""
+
+    @classmethod
+    def _parse_doc_structure(cls, text: str) -> list[str]:
+        """Parse ## 문서 구조 section into a list of heading lines."""
+        m = re.search(r"## 문서 구조\s*\n(.*?)(?=\n## |\Z)", text, re.DOTALL)
+        if not m:
+            return []
+        lines = []
+        for line in m.group(1).strip().splitlines():
+            line = line.strip().lstrip("- ").strip()
+            if line:
+                lines.append(line)
+        return lines
 
     @classmethod
     def _compile_measure(cls, code: str, item_name: str) -> Callable:
@@ -479,6 +495,7 @@ def run_loop(
     history: list[IterationRecord] = []
     prev_score = 0.0
     result: RunResult | None = None
+    first_run_metadata: dict = {}  # preserved from iter 1 for DB recording
     last_good_files: list[Path] = []
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -516,6 +533,7 @@ def run_loop(
         try:
             if iteration == 1:
                 result = task.run(context)
+                first_run_metadata = result.metadata.copy() if result.metadata else {}
             else:
                 feedback = _build_feedback(
                     iteration=iteration - 1,
@@ -642,8 +660,8 @@ def run_loop(
                 shutil.copy2(f, final_dir / f.name)
 
         # Record to DB only after successful verdict
-        if result and result.metadata.get("all_docs"):
-            _record_tracker(result.metadata, run_id)
+        if first_run_metadata.get("all_docs"):
+            _record_tracker(first_run_metadata, run_id)
 
     elif status == "discard":
         discarded_dir.mkdir(parents=True, exist_ok=True)
