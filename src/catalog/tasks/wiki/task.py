@@ -16,6 +16,16 @@ from pathlib import Path
 
 import openai
 
+try:
+    from catalog.sdk_profiles.chatgpt_oauth import ChatGPTClient
+except ImportError:
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+        from catalog.sdk_profiles.chatgpt_oauth import ChatGPTClient  # type: ignore[no-redef]
+    except ImportError:
+        ChatGPTClient = None  # type: ignore[assignment,misc]
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,7 +34,20 @@ class WikiAgent:
     """Generalist agent for wiki content generation."""
 
     def __init__(self, model: str | None = None):
-        backend = os.environ.get("NANOCLAW_AGENT_BACKEND", "openai")
+        backend = os.environ.get("NANOCLAW_AGENT_BACKEND", "")
+
+        # Try ChatGPT OAuth first when auth.json exists and no explicit backend override
+        if (
+            ChatGPTClient is not None
+            and ChatGPTClient.AUTH_PATH.exists()
+            and backend not in ("zai", "openai-compat", "opencode")
+        ):
+            self._chatgpt = ChatGPTClient(model=model or "gpt-5.4")
+            self._use_chatgpt = True
+            self.model = model or "gpt-5.4"
+            return
+
+        self._use_chatgpt = False
 
         if backend in ("zai", "openai-compat"):
             api_key = os.environ.get("OPENAI_COMPAT_API_KEY", "")
@@ -43,6 +66,8 @@ class WikiAgent:
         self.model = model or default_model
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
+        if self._use_chatgpt:
+            return self._chatgpt.generate(system_prompt, user_prompt)
         max_retries = 5
         for attempt in range(max_retries + 1):
             try:

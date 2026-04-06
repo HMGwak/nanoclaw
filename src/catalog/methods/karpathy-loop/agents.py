@@ -14,6 +14,16 @@ from typing import Any
 import openai
 
 try:
+    from catalog.sdk_profiles.chatgpt_oauth import ChatGPTClient
+except ImportError:
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+        from catalog.sdk_profiles.chatgpt_oauth import ChatGPTClient  # type: ignore[no-redef]
+    except ImportError:
+        ChatGPTClient = None  # type: ignore[assignment,misc]
+
+try:
     from .loop_types import (
         Context,
         EvalResult,
@@ -38,7 +48,20 @@ class OpenAIAgents:
     """OpenAI SDK adapter implementing AgentsProtocol."""
 
     def __init__(self, model: str | None = None):
-        backend = os.environ.get("NANOCLAW_AGENT_BACKEND", "openai")
+        backend = os.environ.get("NANOCLAW_AGENT_BACKEND", "")
+
+        # Try ChatGPT OAuth first when auth.json exists and no explicit backend override
+        if (
+            ChatGPTClient is not None
+            and ChatGPTClient.AUTH_PATH.exists()
+            and backend not in ("zai", "openai-compat", "opencode")
+        ):
+            self.client = ChatGPTClient(model=model or "gpt-5.4")
+            self._use_chatgpt = True
+            self.model = model or "gpt-5.4"
+            return
+
+        self._use_chatgpt = False
 
         if backend in ("zai", "openai-compat"):
             api_key = os.environ.get("OPENAI_COMPAT_API_KEY", "")
@@ -57,6 +80,8 @@ class OpenAIAgents:
         self.model = model or default_model
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
+        if self._use_chatgpt:
+            return self.client.generate(system_prompt, user_prompt)
         response = self._call_api(system_prompt, user_prompt)
         return response.choices[0].message.content or ""
 

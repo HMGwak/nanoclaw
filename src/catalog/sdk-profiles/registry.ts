@@ -11,6 +11,12 @@ const SDK_PROFILES: Record<string, SdkProfileSpec> = {
     backend: 'opencode',
     model: 'opencode-go/kimi-k2.5',
   },
+  chatgpt_oauth: {
+    id: 'chatgpt_oauth',
+    backend: 'openai',
+    model: 'gpt-5.4',
+    // Uses ~/.codex/auth.json OAuth tokens via ChatGPT backend API
+  },
 };
 
 export function getSdkProfileSpec(id: string): SdkProfileSpec | null {
