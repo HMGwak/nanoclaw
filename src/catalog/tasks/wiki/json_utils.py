@@ -28,17 +28,27 @@ def extract_json(text: str) -> str:
     if m:
         return m.group(1).strip()
 
-    # Try raw JSON object
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        return text[start : end + 1]
+    # Find first occurrence of both { and [
+    obj_start = text.find("{")
+    arr_start = text.find("[")
 
-    # Try raw JSON array
-    start = text.find("[")
-    end = text.rfind("]")
-    if start != -1 and end != -1 and end > start:
-        return text[start : end + 1]
+    # Pick whichever appears first in the text
+    if arr_start != -1 and (obj_start == -1 or arr_start < obj_start):
+        # Array comes first — extract [...]
+        end = text.rfind("]")
+        if end != -1 and end > arr_start:
+            return text[arr_start : end + 1]
+
+    if obj_start != -1:
+        end = text.rfind("}")
+        if end != -1 and end > obj_start:
+            return text[obj_start : end + 1]
+
+    # Fallback: try array even if object start was earlier
+    if arr_start != -1:
+        end = text.rfind("]")
+        if end != -1 and end > arr_start:
+            return text[arr_start : end + 1]
 
     return text
 

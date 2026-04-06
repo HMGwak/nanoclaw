@@ -306,11 +306,13 @@ class ChunkedSynthesizer:
         nodes = md_to_json(original)
         try:
             diffs = parse_validated_list(response, MdDiff)
-        except ValueError:
-            logger.warning("MdDiff parse failed, keeping original")
+        except ValueError as exc:
+            logger.warning("MdDiff parse failed, keeping original. error=%s response_preview=%.500s", exc, response)
             return original
         if not diffs:
+            logger.warning("MdDiff response yielded 0 valid diffs. response_preview=%.500s", response)
             return original
+        logger.info("Applying %d MdDiff operations", len(diffs))
         updated = apply_json_diffs(nodes, diffs)
         return json_to_md(updated)
 

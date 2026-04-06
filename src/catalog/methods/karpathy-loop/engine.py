@@ -640,6 +640,11 @@ def run_loop(
         for f in last_good_files:
             if f.exists():
                 shutil.copy2(f, final_dir / f.name)
+
+        # Record to DB only after successful verdict
+        if result and result.metadata.get("all_docs"):
+            _record_tracker(result.metadata, run_id)
+
     elif status == "discard":
         discarded_dir.mkdir(parents=True, exist_ok=True)
         for f in last_good_files:
@@ -895,6 +900,28 @@ def _load_task(task_spec: str) -> TaskProtocol:
     module = importlib.import_module(module_path)
     cls = getattr(module, class_name)
     return cls()
+
+
+def _record_tracker(metadata: dict, run_id: str) -> None:
+    """Record processed docs to WikiTracker after successful verdict."""
+    try:
+        import sys as _sys
+        engine_dir = str(Path(__file__).parent.parent.parent)
+        if engine_dir not in _sys.path:
+            _sys.path.insert(0, engine_dir)
+        from catalog.tasks.wiki.wiki_tracker import WikiTracker
+
+        tracker = WikiTracker()
+        all_docs = [Path(p) for p in metadata["all_docs"]]
+        domain = metadata.get("domain", "")
+        base_path = metadata.get("base_path", "")
+        filter_pattern = metadata.get("filter_pattern")
+
+        tracker.record_run(run_id, domain, base_path, filter_pattern, all_docs, {})
+        tracker.complete_run(run_id, output_count=1)
+        logger.info("DB recorded: %d docs for domain=%s", len(all_docs), domain)
+    except Exception as exc:
+        logger.warning("Failed to record to WikiTracker: %s", exc)
 
 
 def _resolve_globs(patterns: list[str]) -> list[Path]:

@@ -285,16 +285,21 @@ class WikiTask:
         docs_to_process = new + changed
         wiki_content = synthesizer.synthesize(docs_to_process, existing_wiki, domain)
 
-        # 4. Save + track
+        # 4. Save (DB tracking deferred to engine after keep/converged verdict)
         context.output_dir.mkdir(parents=True, exist_ok=True)
         out_path = context.output_dir / f"{domain}.md"
         out_path.write_text(wiki_content, encoding="utf-8")
 
-        run_id = getattr(context, "run_id", str(uuid.uuid4()))
-        tracker.record_run(run_id, domain, str(base_path), filter_pattern, all_docs, {})
-        tracker.complete_run(run_id, output_count=1)
-
-        return RunResult(output_files=[out_path])
+        return RunResult(
+            output_files=[out_path],
+            metadata={
+                "domain": domain,
+                "base_path": str(base_path),
+                "filter_pattern": filter_pattern,
+                "all_docs": [str(p) for p in all_docs],
+                "docs_processed": [str(p) for p in docs_to_process],
+            },
+        )
 
     def _run_legacy(self, context) -> RunResult:
         """Original 1:1 doc → wiki note mode."""
@@ -400,12 +405,13 @@ class WikiTask:
         nodes = md_to_json(original)
         try:
             diffs = parse_validated_list(response, MdDiff)
-        except ValueError:
-            logger.warning("MdDiff parse failed, keeping original")
+        except ValueError as exc:
+            logger.warning("MdDiff parse failed, keeping original. error=%s response_preview=%.500s", exc, response)
             return original
         if not diffs:
-            logger.warning("MdDiff response is not a list or is empty")
+            logger.warning("MdDiff response yielded 0 valid diffs. response_preview=%.500s", response)
             return original
+        logger.info("Applying %d MdDiff operations", len(diffs))
         updated = apply_json_diffs(nodes, diffs)
         return json_to_md(updated)
 
