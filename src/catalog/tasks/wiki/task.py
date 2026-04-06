@@ -151,47 +151,132 @@ UPDATE_SYSTEM_PROMPT = """\
 6. 중복 내용을 제거하고 최신 정보로 갱신할 것
 """
 
-REVISE_SYSTEM_PROMPT = """\
+REVISE_BASE_INSTRUCTIONS = """\
 당신은 wiki 품질 개선 전문가입니다.
 피드백을 반영하여 wiki note의 특정 부분만 수정합니다.
 
 규칙:
-1. 전체 문서를 다시 작성하지 말 것 — 수정이 필요한 부분만 diff로 제시할 것
-2. 피드백의 하드 게이트 실패 항목을 최우선으로 수정할 것
-3. 점수가 낮은 항목부터 순서대로 개선할 것
-4. raw 문서에 없는 내용을 절대 추가하지 말 것 (hallucination 금지)
-5. 각 개선 사항에 대해 raw 출처 각주를 반드시 달 것
+1. 전체 문서를 다시 작성하지 말 것 — 수정이 필요한 부분만 섹션 단위로 수정할 것
+2. raw 문서에 없는 내용을 절대 추가하지 말 것 (hallucination 금지)
+3. 각 개선 사항에 대해 raw 출처 각주를 반드시 달 것
 
-원본 문서는 줄번호와 함께 제공됩니다. 줄번호를 참조하여 정확한 위치를 지정하세요.
+수정 방식 (JSON 배열):
+- replace_section: 특정 섹션의 본문 내용을 교체 (제목은 유지)
+- add_section: 새로운 섹션을 특정 섹션 뒤에 추가 (부모 섹션 경로 지정)
+- append_to: 특정 섹션의 끝에 내용을 추가
 
-응답 형식 (JSON 배열):
+응답 형식:
 ```json
 [
   {
-    "action": "replace",
-    "start_line": 45,
-    "end_line": 47,
-    "content": "교체할 새 텍스트 (여러 줄 가능)"
+    "action": "replace_section",
+    "heading_path": "## 섹션1 > ### 서브섹션1.1",
+    "content": "교체할 새 본문 내용 (각주 포함)"
   },
   {
-    "action": "insert_after",
-    "line": 30,
-    "content": "이 줄 뒤에 삽입할 텍스트"
+    "action": "add_section",
+    "parent_heading_path": "## 섹션1",
+    "new_heading": "### 신규 서브섹션",
+    "content": "신규 섹션의 내용"
   },
   {
-    "action": "delete",
-    "start_line": 10,
-    "end_line": 12
+    "action": "append_to",
+    "heading_path": "## 섹션2",
+    "content": "추가할 내용"
   }
 ]
 ```
 
 주의:
-- start_line/end_line/line은 원본의 줄번호 (1부터 시작)
-- 변경이 필요 없는 부분은 건드리지 말 것
-- 최소한의 변경으로 최대 효과를 낼 것
-- 줄번호는 원본 문서 기준이며, 이전 diff 적용 후가 아님
+- heading_path는 '## 제목1 > ### 제목2' 와 같은 형식으로 정확히 지정할 것
+- content에는 마크다운 문법을 사용할 수 있음
 """
+
+REVISE_SYSTEM_PROMPT_IMPROVE = REVISE_BASE_INSTRUCTIONS + """\
+현재 목표: 약한 영역 개선
+점수가 낮은 항목부터 순서대로 개선하여 품질을 높이세요.
+"""
+
+REVISE_SYSTEM_PROMPT_FIX_GATE = REVISE_BASE_INSTRUCTIONS + """\
+현재 목표: 하드 게이트 통과
+실패한 게이트 항목을 최우선으로 해결하세요. 최소한의 수정으로 요구사항을 충족하세요.
+"""
+
+REVISE_SYSTEM_PROMPT_RECOVERY = REVISE_BASE_INSTRUCTIONS + """\
+현재 목표: 점수 하락 복구
+이전 수정에서 점수가 떨어졌습니다. 피드백을 더 엄격하게 분석하여 다른 방식으로 접근하세요.
+"""
+
+
+# ── MarkdownSectionEditor ──────────────────────────────────────────
+class MarkdownSectionEditor:
+    """Helper to edit Markdown sections using heading paths as anchors."""
+
+    def __init__(self, content: str):
+        self.lines = content.split("\n")
+
+    def find_section(self, heading_path: str) -> tuple[int, int] | None:
+        """Find line indices of a section. Returns (start_idx, end_idx) or None."""
+        path_parts = [p.strip() for p in heading_path.split(">")]
+        current_idx = 0
+        start_idx = -1
+
+        for part in path_parts:
+            found = False
+            for i in range(current_idx, len(self.lines)):
+                if self.lines[i].strip() == part:
+                    current_idx = i
+                    start_idx = i
+                    found = True
+                    break
+            if not found:
+                return None
+
+        if start_idx == -1:
+            return None
+
+        # Determine level of the leaf heading
+        m = re.match(r"^(#+)", path_parts[-1])
+        level = len(m.group(1)) if m else 0
+
+        end_idx = len(self.lines) - 1
+        for i in range(start_idx + 1, len(self.lines)):
+            line = self.lines[i].strip()
+            if line.startswith("#"):
+                m_inner = re.match(r"^(#+)", line)
+                if m_inner and len(m_inner.group(1)) <= level:
+                    end_idx = i - 1
+                    break
+        return (start_idx, end_idx)
+
+    def replace_section(self, heading_path: str, content: str) -> bool:
+        r = self.find_section(heading_path)
+        if not r: return False
+        start, end = r
+        self.lines[start + 1 : end + 1] = content.split("\n")
+        return True
+
+    def append_to_section(self, heading_path: str, content: str) -> bool:
+        r = self.find_section(heading_path)
+        if not r: return False
+        _, end = r
+        new_lines = content.split("\n")
+        if self.lines[end].strip() != "" and new_lines:
+            self.lines.insert(end + 1, "")
+            end += 1
+        self.lines[end + 1 : end + 1] = new_lines
+        return True
+
+    def add_section(self, parent_path: str, new_heading: str, content: str) -> bool:
+        r = self.find_section(parent_path)
+        if not r: return False
+        _, end = r
+        new_sec = [new_heading] + content.split("\n")
+        self.lines[end + 1 : end + 1] = ["", ""] + new_sec
+        return True
+
+    def get_content(self) -> str:
+        return "\n".join(self.lines)
 
 
 # ── WikiTask ─────────────────────────────────────────────────────
@@ -305,8 +390,10 @@ class WikiTask:
         return RunResult(output_files=output_files)
 
     def revise(self, context, feedback) -> RunResult:
-        """Revise wiki notes via diff-based patching (not full regeneration)."""
+        """Revise wiki notes via heading-path based sections (not line diffs)."""
         output_files: list[Path] = []
+
+        system_prompt = self._select_revise_prompt(feedback)
 
         for prev_file in feedback.previous_output_files:
             existing_wiki = prev_file.read_text(encoding="utf-8")
@@ -315,12 +402,12 @@ class WikiTask:
             )
 
             diff_response = self.agent.generate(
-                system_prompt=REVISE_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 user_prompt=revision_prompt,
             )
 
-            # Apply diffs to existing wiki
-            revised = self._apply_diffs(existing_wiki, diff_response)
+            # Apply section-based diffs to existing wiki
+            revised = self._apply_section_diffs(existing_wiki, diff_response)
 
             out_path = context.output_dir / prev_file.name
             out_path.write_text(revised, encoding="utf-8")
@@ -328,64 +415,63 @@ class WikiTask:
 
         return RunResult(output_files=output_files)
 
-    def _apply_diffs(self, original: str, diff_response: str) -> str:
-        """Apply line-based diff patches from LLM response to original wiki."""
+    def _select_revise_prompt(self, feedback) -> str:
+        """Choose the most appropriate system prompt based on feedback state."""
+        # 1. Recovery mode: score dropped from previous iteration
+        if feedback.previous_score is not None and feedback.total_score < feedback.previous_score:
+            logger.info("Revision: Entering recovery mode (score drop: %.1f -> %.1f)", 
+                        feedback.previous_score, feedback.total_score)
+            return REVISE_SYSTEM_PROMPT_RECOVERY
+        
+        # 2. Fix Gate mode: has hard gate failures
+        if feedback.hard_gate_failures:
+            logger.info("Revision: Entering fix-gate mode (%d failures)", len(feedback.hard_gate_failures))
+            return REVISE_SYSTEM_PROMPT_FIX_GATE
+            
+        # 3. Default: Improve mode
+        return REVISE_SYSTEM_PROMPT_IMPROVE
+
+    def _apply_section_diffs(self, original: str, response: str) -> str:
+        """Apply section-based edits from LLM JSON response."""
         try:
-            diffs = json.loads(_extract_json_from_text(diff_response))
+            edits = json.loads(_extract_json_from_text(response))
         except (json.JSONDecodeError, ValueError):
-            logger.warning("Diff parse failed, keeping original wiki unchanged")
+            logger.warning("Section diff parse failed, keeping original")
             return original
 
-        if not isinstance(diffs, list):
-            logger.warning("Diff response is not a list, keeping original wiki unchanged")
+        if not isinstance(edits, list):
+            logger.warning("Section diff response is not a list")
             return original
 
-        lines = original.split("\n")
-        # Sort diffs by line number descending so later edits don't shift earlier ones
-        def sort_key(d):
-            return d.get("start_line", d.get("line", 0))
-
-        diffs_sorted = sorted(diffs, key=sort_key, reverse=True)
-
+        editor = MarkdownSectionEditor(original)
         applied = 0
-        for i, diff in enumerate(diffs_sorted):
-            action = diff.get("action", "")
+        for i, edit in enumerate(edits):
+            action = edit.get("action")
+            success = False
+            
+            if action == "replace_section":
+                success = editor.replace_section(
+                    edit.get("heading_path", ""), edit.get("content", "")
+                )
+            elif action == "append_to":
+                success = editor.append_to_section(
+                    edit.get("heading_path", ""), edit.get("content", "")
+                )
+            elif action == "add_section":
+                success = editor.add_section(
+                    edit.get("parent_heading_path", ""),
+                    edit.get("new_heading", ""),
+                    edit.get("content", ""),
+                )
+            
+            if success:
+                applied += 1
+            else:
+                logger.warning("Edit #%d (%s) failed for path: %s", 
+                               i, action, edit.get("heading_path") or edit.get("parent_heading_path"))
 
-            if action == "replace":
-                start = diff.get("start_line", 0) - 1  # 1-indexed → 0-indexed
-                end = diff.get("end_line", start + 1) - 1
-                content = diff.get("content", "")
-                if 0 <= start <= end < len(lines):
-                    new_lines = content.split("\n")
-                    lines[start:end + 1] = new_lines
-                    applied += 1
-                else:
-                    logger.warning("Diff #%d: line range %d-%d out of bounds (%d lines)", i, start+1, end+1, len(lines))
-
-            elif action == "insert_after":
-                line = diff.get("line", 0) - 1
-                content = diff.get("content", "")
-                if 0 <= line < len(lines):
-                    new_lines = content.split("\n")
-                    lines[line + 1:line + 1] = new_lines
-                    applied += 1
-                else:
-                    logger.warning("Diff #%d: line %d out of bounds (%d lines)", i, line+1, len(lines))
-
-            elif action == "delete":
-                start = diff.get("start_line", 0) - 1
-                end = diff.get("end_line", start + 1) - 1
-                if 0 <= start <= end < len(lines):
-                    del lines[start:end + 1]
-                    applied += 1
-                else:
-                    logger.warning("Diff #%d: delete range %d-%d out of bounds (%d lines)", i, start+1, end+1, len(lines))
-
-        logger.info("Applied %d/%d diffs", applied, len(diffs))
-        if applied == 0:
-            logger.warning("No diffs could be applied, keeping original")
-            return original
-        return "\n".join(lines)
+        logger.info("Applied %d/%d section edits", applied, len(edits))
+        return editor.get_content() if applied > 0 else original
 
     def _load_existing_wiki(self, reference_files: list[Path], domain: str) -> str | None:
         """Find and return the existing wiki note for domain, or None."""
@@ -415,11 +501,7 @@ class WikiTask:
         feedback,
         reference_files: list[Path],
     ) -> str:
-        # Include line numbers for precise diff targeting
-        numbered = "\n".join(
-            f"{i+1}: {line}" for i, line in enumerate(content.split("\n"))
-        )
-        lines = [f"현재 wiki note (줄번호 포함):\n{numbered}\n"]
+        lines = [f"현재 wiki note 본문:\n{content}\n"]
         lines.append(f"총점: {feedback.total_score}\n")
 
         if feedback.hard_gate_failures:

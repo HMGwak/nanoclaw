@@ -125,6 +125,7 @@ class Feedback:
     items: list[FeedbackItem]
     hard_gate_failures: list[HardGateFailure]
     previous_output_files: list[Path]
+    previous_score: float | None = None
 
 
 # ── PRD section 6 derived types ──────────────────────────────────

@@ -405,6 +405,7 @@ def _build_feedback(
     rubric: ParsedRubric,
     gate_failures: list[HardGateResult],
     previous_output_files: list[Path],
+    previous_score: float | None = None,
 ) -> Feedback:
     items: list[FeedbackItem] = []
     item_map = {it.name: it for it in rubric.items}
@@ -441,6 +442,7 @@ def _build_feedback(
         items=items,
         hard_gate_failures=hard_gate_failures,
         previous_output_files=previous_output_files,
+        previous_score=previous_score,
     )
 
 
@@ -521,6 +523,7 @@ def run_loop(
                     rubric=rubric,
                     gate_failures=gate_failures,
                     previous_output_files=last_good_files,
+                    previous_score=history[-2].total if len(history) >= 2 else None,
                 )
                 result = task.revise(context, feedback)
         except Exception as exc:
