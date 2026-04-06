@@ -9,18 +9,21 @@
 
 ## 인증 방법
 
-### ChatGPT OAuth (기본)
-- `~/.codex/auth.json`에 저장된 OAuth 토큰 사용
-- 엔드포인트: `https://chatgpt.com/backend-api/codex/responses`
-- 헤더: `Authorization: Bearer {access_token}`, `ChatGPT-Account-ID: {account_id}`
-- 필수 파라미터: `stream: true`, `store: false`
+### 핵심 원칙
+- **OPENAI_API_KEY 불필요** — 이 프로젝트는 ChatGPT OAuth로 인증한다. API 키를 요구하거나 제안하지 말 것.
+- **openai SDK 사용** — 모든 LLM 호출은 openai SDK (`openai.OpenAI(...)`)를 통해 이루어진다. requests, httpx 등으로 직접 HTTP 호출하지 말 것.
+- **모델 변경 금지** — 기본 모델은 gpt-5.4이다. 다른 모델(gpt-4o, gpt-4 등)을 제안하지 말 것. 로컬 모델(gemma4, qwen3.5)은 명시적으로 지정할 때만 사용.
+
+### ChatGPT OAuth (기본, openai SDK 기반)
+- `~/.codex/auth.json`의 OAuth 토큰을 openai SDK에 주입
+- `openai.OpenAI(api_key=access_token, base_url="https://chatgpt.com/backend-api/codex", default_headers={"ChatGPT-Account-ID": account_id})`
+- `client.responses.create(stream=True, store=False)` — 스트리밍 필수
 - 토큰 갱신: `POST https://auth.openai.com/oauth/token` (refresh_token)
 - client_id: `app_EMoamEEZ73f0CkXaXp7hrann`
-- 지원 모델: gpt-5.4 (ChatGPT Pro 계정 전용 모델)
+- 구현 위치: `src/catalog/sdk_profiles/chatgpt_oauth.py`
 
-### 환경변수 백엔드 (대안)
+### 환경변수 백엔드 (대안, 컨테이너 전용)
 - `NANOCLAW_AGENT_BACKEND` 환경변수로 선택
-- openai: `OPENAI_API_KEY` + `OPENAI_BASE_URL`
 - zai: `OPENAI_COMPAT_API_KEY` + `OPENAI_COMPAT_BASE_URL`
 - opencode: CLI 전용 (직접 API 호출 불가)
 
