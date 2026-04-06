@@ -150,6 +150,21 @@ describe('service deployment resolution', () => {
     expect(secretaryDeployment?.lead?.toolsetIds).toContain(
       'global_browser_research',
     );
+    expect(secretaryDeployment?.containerRuntime.skillIds).toEqual(
+      expect.arrayContaining([
+        'agent-browser',
+        'obsidian-markdown',
+        'obsidian-bases',
+        'obsidian-canvas',
+      ]),
+    );
+    expect(secretaryDeployment?.containerRuntime.additionalMounts).toEqual([
+      {
+        hostPath: '/Users/planee/Documents/Mywork',
+        containerPath: 'obsidian-vault',
+        readonly: false,
+      },
+    ]);
     expect(secretaryDeployment?.departmentPrompt).toContain(
       'Discord Secretary Department',
     );
@@ -217,5 +232,18 @@ describe('service deployment resolution', () => {
         'playwright_open',
       ]),
     );
+  });
+
+  it('keeps the main group from inheriting secretary vault mounts by alias', () => {
+    const deployment = resolveServiceDeployment({
+      name: '메인',
+      folder: 'main',
+      trigger: '@메인',
+      added_at: '2026-01-01T00:00:00Z',
+      isMain: true,
+    });
+
+    expect(deployment?.departmentId).toBe('secretary');
+    expect(deployment?.containerRuntime.additionalMounts).toBeUndefined();
   });
 });

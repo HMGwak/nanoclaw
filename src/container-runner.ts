@@ -62,6 +62,11 @@ export interface ContainerInput {
     role?: string;
     allowedTools?: string[];
   }>;
+  skillIds?: string[];
+  mountedDirectories?: Array<{
+    path: string;
+    readonly: boolean;
+  }>;
 }
 
 export interface ContainerOutput {
@@ -343,9 +348,13 @@ function buildVolumeMounts(
   });
 
   // Additional mounts validated against external allowlist (tamper-proof from containers)
-  if (group.containerConfig?.additionalMounts) {
+  const deployment = resolveServiceDeployment(group);
+  const additionalMounts =
+    deployment?.containerRuntime.additionalMounts ||
+    group.containerConfig?.additionalMounts;
+  if (additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
-      group.containerConfig.additionalMounts,
+      additionalMounts,
       group.name,
       isMain,
     );
@@ -608,6 +617,19 @@ export async function runContainerAgent(
         { group: group!.name, count: groupTeam.delegateConfigs.length },
         'Passing sub-agents to container',
       );
+    }
+    const deployment = resolveServiceDeployment(group);
+    if (deployment?.containerRuntime.skillIds?.length) {
+      containerInput.skillIds = deployment.containerRuntime.skillIds;
+    }
+    const mountedDirectories = mounts
+      .filter((mount) => mount.containerPath.startsWith('/workspace/extra/'))
+      .map((mount) => ({
+        path: mount.containerPath,
+        readonly: mount.readonly,
+      }));
+    if (mountedDirectories.length > 0) {
+      containerInput.mountedDirectories = mountedDirectories;
     }
 
     container.stdin.write(JSON.stringify(containerInput));

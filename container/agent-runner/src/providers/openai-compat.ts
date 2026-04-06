@@ -26,6 +26,7 @@ import { filterTools } from '../tools/catalog.js';
 const DEFAULT_MODEL = 'glm-5';
 const DEFAULT_BASE_URL = 'https://api.z.ai/api/paas/v4/';
 const MAX_TOOL_LOOPS = 16;
+const DEFAULT_COMPLETION_TIMEOUT_MS = 30000;
 
 const SESSION_STATE_DIR = '/home/node/.nanoclaw/openai-compat';
 
@@ -97,8 +98,14 @@ async function runOpenAICompatTurn(
     ? allowedToolsRaw.split(',').map((t) => t.trim())
     : undefined;
   const tools = filterTools(allowedTools);
+  const completionTimeoutMs = parseInt(
+    context.agentEnv.NANOCLAW_COMPLETION_TIMEOUT_MS ||
+      `${DEFAULT_COMPLETION_TIMEOUT_MS}`,
+    10,
+  );
 
   context.log(`Tools available: ${tools.length} (filtered: ${!!allowedTools})`);
+  context.log(`Completion timeout: ${completionTimeoutMs}ms`);
 
   try {
     const client = new OpenAI({ apiKey, baseURL });
@@ -133,6 +140,7 @@ async function runOpenAICompatTurn(
         },
       },
       maxLoops: MAX_TOOL_LOOPS,
+      completionTimeoutMs,
     });
 
     // Save history (simplified type for compat providers)

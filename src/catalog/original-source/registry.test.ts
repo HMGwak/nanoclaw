@@ -120,5 +120,4 @@ describe('original source manifest registry', () => {
       }
     }
   });
-
 });

@@ -71,6 +71,7 @@ import {
   getDiscordGroupBindingForGroup,
   recordDiscordSharedVisibleReply,
 } from './services/discord/index.js';
+import { formatAgentFailureNotice } from './agent-failure.js';
 import { normalizeAgentOutputs } from './agent-output.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
@@ -238,9 +239,15 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
   if (fs.existsSync(groupConfigFile)) {
     try {
       const fileConfig = JSON.parse(fs.readFileSync(groupConfigFile, 'utf-8'));
-      group = { ...group, containerConfig: { ...group.containerConfig, ...fileConfig } };
+      group = {
+        ...group,
+        containerConfig: { ...group.containerConfig, ...fileConfig },
+      };
     } catch (err) {
-      logger.warn({ folder: group.folder, err }, 'Failed to parse group config.json');
+      logger.warn(
+        { folder: group.folder, err },
+        'Failed to parse group config.json',
+      );
     }
   }
 
@@ -382,6 +389,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
+  let agentErrorMessage: string | null = null;
+  let failureNoticeSent = false;
   let outputSentToUser = false;
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
@@ -420,6 +429,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
     if (result.status === 'error') {
       hadError = true;
+      agentErrorMessage = result.error || agentErrorMessage;
+      if (!failureNoticeSent) {
+        const sender = resolveGroupTargetSender(group, chatJid);
+        const notice = formatAgentFailureNotice(agentErrorMessage);
+        await channel.sendMessage(chatJid, notice, { sender });
+        recordDiscordSharedVisibleReply(group, chatJid, sender, notice);
+        outputSentToUser = true;
+        failureNoticeSent = true;
+      }
+      queue.closeStdin(chatJid);
     }
   });
 
@@ -436,6 +455,26 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       );
       return true;
     }
+
+    if (!failureNoticeSent) {
+      try {
+        const sender = resolveGroupTargetSender(group, chatJid);
+        const notice = formatAgentFailureNotice(agentErrorMessage);
+        await channel.sendMessage(chatJid, notice, { sender });
+        recordDiscordSharedVisibleReply(group, chatJid, sender, notice);
+        logger.warn(
+          { group: group.name, error: agentErrorMessage },
+          'Agent error without user output, sent failure notice',
+        );
+        return true;
+      } catch (err) {
+        logger.error(
+          { group: group.name, err },
+          'Failed to send agent failure notice',
+        );
+      }
+    }
+
     // Roll back cursor so retries can re-process these messages
     lastAgentTimestamp[chatJid] = previousCursor;
     saveState();

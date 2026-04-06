@@ -14,6 +14,7 @@ export interface ResolvedAgentRuntimeSpec extends SubAgentConfig {
   capabilityPrompt: string | null;
   personaPrompt: string | null;
   toolsetIds: string[];
+  skillIds: string[];
   flowIds: string[];
   browserPolicy?: BrowserToolPolicySpec;
 }
@@ -50,5 +51,6 @@ export interface ResolvedServiceDeployment {
     | 'baseUrl'
   > & {
     browserPolicy?: BrowserToolPolicySpec;
+    skillIds?: string[];
   };
 }

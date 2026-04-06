@@ -19,6 +19,9 @@ export interface DiscordGroupBindingSpec {
   responsePolicy?: 'always' | 'optional';
   requiresTrigger?: boolean;
   canStartWorkflow?: boolean;
+  defaultAdditionalMounts?: NonNullable<
+    RegisteredGroup['containerConfig']
+  >['additionalMounts'];
 }
 
 function buildWorkshopSenderBotMap(
@@ -59,6 +62,7 @@ const DISCORD_GROUP_BINDINGS: DiscordGroupBindingSpec[] =
     responsePolicy: resource.responsePolicy,
     requiresTrigger: resource.requiresTrigger,
     canStartWorkflow: resource.canStartWorkflow,
+    defaultAdditionalMounts: resource.defaultAdditionalMounts,
   }));
 
 export function getDiscordGroupBindingForGroup(

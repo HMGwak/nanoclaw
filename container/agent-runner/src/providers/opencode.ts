@@ -7,7 +7,7 @@
  *
  * Architecture:
  *   1. Generate opencode.jsonc config with model, MCP servers, tool permissions
- *   2. Copy custom tools to .opencode/tools/ (agent-browser, playwright wrappers)
+ *   2. Copy custom tools to .opencode/tools/ using the current OpenCode plugin API
  *   3. Run `opencode run --format json "prompt"` as a subprocess
  *   4. Parse JSON event stream for assistant messages
  *
@@ -19,8 +19,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 
 import {
   buildInstructionSections,
@@ -32,13 +31,144 @@ import {
   AgentTurnResult,
 } from '../types.js';
 
-const execFileAsync = promisify(execFile);
-
 const DEFAULT_OPENCODE_MODEL = 'opencode-go/kimi-k2.5';
 const OPENCODE_TIMEOUT_MS = 300_000;
 const MAX_OUTPUT = 200_000;
 const WORK_DIR = '/workspace/group';
 const CONFIG_DIR = '/workspace/group';
+
+interface CommandCaptureOptions {
+  cwd: string;
+  env: Record<string, string>;
+  timeoutMs: number;
+  maxBuffer: number;
+  log: (message: string) => void;
+}
+
+interface CommandCaptureResult {
+  stdout: string;
+  stderr: string;
+}
+
+function appendChunk(
+  current: string,
+  chunk: string,
+  limit: number,
+): { value: string; truncated: boolean } {
+  if (current.length >= limit) {
+    return { value: current, truncated: true };
+  }
+  const remaining = limit - current.length;
+  if (chunk.length > remaining) {
+    return {
+      value: current + chunk.slice(0, remaining),
+      truncated: true,
+    };
+  }
+  return { value: current + chunk, truncated: false };
+}
+
+export async function runCommandWithClosedStdin(
+  command: string,
+  args: string[],
+  options: CommandCaptureOptions,
+): Promise<CommandCaptureResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
+    let timedOut = false;
+    let settled = false;
+
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutHandle);
+      fn();
+    };
+
+    const killTimer = () => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      child.kill('SIGKILL');
+    };
+
+    const timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      options.log(
+        `OpenCode process timed out after ${options.timeoutMs}ms, terminating`,
+      );
+      child.kill('SIGTERM');
+      setTimeout(killTimer, 5000).unref();
+    }, options.timeoutMs);
+
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+
+    child.stdout.on('data', (chunk: string) => {
+      const appended = appendChunk(stdout, chunk, options.maxBuffer);
+      stdout = appended.value;
+      if (appended.truncated && !stdoutTruncated) {
+        stdoutTruncated = true;
+        options.log(`OpenCode stdout truncated at ${options.maxBuffer} chars`);
+      }
+    });
+
+    child.stderr.on('data', (chunk: string) => {
+      const appended = appendChunk(stderr, chunk, options.maxBuffer);
+      stderr = appended.value;
+      if (appended.truncated && !stderrTruncated) {
+        stderrTruncated = true;
+        options.log(`OpenCode stderr truncated at ${options.maxBuffer} chars`);
+      }
+    });
+
+    child.on('error', (err) => {
+      finish(() => reject(err));
+    });
+
+    child.on('close', (code, signal) => {
+      const detail = stderr.trim() || stdout.trim();
+      if (timedOut) {
+        finish(() =>
+          reject(
+            new Error(
+              `Command timed out after ${options.timeoutMs}ms${
+                detail ? `: ${detail.slice(0, 500)}` : ''
+              }`,
+            ),
+          ),
+        );
+        return;
+      }
+
+      if (code !== 0) {
+        finish(() =>
+          reject(
+            new Error(
+              `Command failed${
+                code !== null ? ` with code ${code}` : ''
+              }${signal ? ` (${signal})` : ''}${
+                detail ? `: ${detail.slice(0, 500)}` : ''
+              }`,
+            ),
+          ),
+        );
+        return;
+      }
+
+      finish(() => resolve({ stdout, stderr }));
+    });
+
+    child.stdin.end();
+  });
+}
 
 /**
  * Write opencode.jsonc config for this session.
@@ -101,28 +231,26 @@ function writeConfig(
  * Install custom tools for agent-browser and playwright.
  * Tools are TypeScript files placed in .opencode/tools/.
  */
-function installCustomTools(ctx: AgentTurnContext): void {
-  const toolsDir = path.join(WORK_DIR, '.opencode', 'tools');
-  fs.mkdirSync(toolsDir, { recursive: true });
-
-  // agent-browser tool — lightweight browsing via accessibility snapshots
-  const agentBrowserTool = `
-import { tool } from "opencode/tool";
-import { z } from "zod";
+export function buildAgentBrowserToolSource(): string {
+  return `
+import { tool } from "@opencode-ai/plugin";
 import { execSync } from "child_process";
 
 const TIMEOUT = 30000;
+const MAX_BUFFER = 100000;
+const quote = (value) => JSON.stringify(String(value));
+
 const run = (args) => {
   try {
-    return execSync(\`agent-browser \${args}\`, { timeout: TIMEOUT, maxBuffer: 100000 }).toString().trim();
+    return execSync(\`agent-browser \${args}\`, { timeout: TIMEOUT, maxBuffer: MAX_BUFFER }).toString().trim();
   } catch (e) { return \`Error: \${e.message}\`; }
 };
 
 export const open = tool({
   description: "Open a URL in the browser and return accessibility snapshot with interactive element refs (@e1, @e2...). Token-efficient. Use for most browsing.",
-  args: { url: z.string().describe("URL to open") },
+  args: { url: tool.schema.string().describe("URL to open") },
   async execute(args) {
-    run(\`open \${args.url}\`);
+    run(\`open \${quote(args.url)}\`);
     run("wait --load networkidle");
     const snapshot = run("snapshot -i");
     const title = run("get title");
@@ -133,9 +261,9 @@ export const open = tool({
 
 export const click = tool({
   description: "Click an element by ref (e.g. @e1) and return updated snapshot.",
-  args: { ref: z.string().describe("Element ref like @e1") },
+  args: { ref: tool.schema.string().describe("Element ref like @e1") },
   async execute(args) {
-    run(\`click \${args.ref}\`);
+    run(\`click \${quote(args.ref)}\`);
     const snapshot = run("snapshot -i");
     return snapshot;
   },
@@ -144,11 +272,11 @@ export const click = tool({
 export const fill = tool({
   description: "Fill a form field by ref with text.",
   args: {
-    ref: z.string().describe("Element ref like @e1"),
-    text: z.string().describe("Text to fill"),
+    ref: tool.schema.string().describe("Element ref like @e1"),
+    text: tool.schema.string().describe("Text to fill"),
   },
   async execute(args) {
-    run(\`fill \${args.ref} "\${args.text}"\`);
+    run(\`fill \${quote(args.ref)} \${quote(args.text)}\`);
     const snapshot = run("snapshot -i");
     return snapshot;
   },
@@ -157,11 +285,11 @@ export const fill = tool({
 export const select = tool({
   description: "Select a dropdown option by ref.",
   args: {
-    ref: z.string().describe("Element ref like @e1"),
-    option: z.string().describe("Option to select"),
+    ref: tool.schema.string().describe("Element ref like @e1"),
+    option: tool.schema.string().describe("Option to select"),
   },
   async execute(args) {
-    run(\`select \${args.ref} "\${args.option}"\`);
+    run(\`select \${quote(args.ref)} \${quote(args.option)}\`);
     const snapshot = run("snapshot -i");
     return snapshot;
   },
@@ -180,17 +308,19 @@ export const snapshot = tool({
 
 export const getText = tool({
   description: "Extract text content from a specific element or the full page.",
-  args: { ref: z.string().optional().describe("Element ref (omit for full page)") },
+  args: {
+    ref: tool.schema.string().optional().describe("Element ref (omit for full page)"),
+  },
   async execute(args) {
-    return args.ref ? run(\`get text \${args.ref}\`) : run("get text");
+    return args.ref ? run(\`get text \${quote(args.ref)}\`) : run("get text");
   },
 });
 
 export const press = tool({
   description: "Press a keyboard key (e.g. Enter, Tab, Escape).",
-  args: { key: z.string().describe("Key to press") },
+  args: { key: tool.schema.string().describe("Key to press") },
   async execute(args) {
-    run(\`press \${args.key}\`);
+    run(\`press \${quote(args.key)}\`);
     const snapshot = run("snapshot -i");
     return snapshot;
   },
@@ -204,11 +334,11 @@ export const close = tool({
   },
 });
 `;
+}
 
-  // playwright tool — full browser control
-  const playwrightTool = `
-import { tool } from "opencode/tool";
-import { z } from "zod";
+export function buildPlaywrightToolSource(): string {
+  return `
+import { tool } from "@opencode-ai/plugin";
 import { execSync } from "child_process";
 import fs from "fs";
 
@@ -244,7 +374,7 @@ try {
 
 export const open = tool({
   description: "Open URL with Playwright and extract full page text. Heavier than agent-browser but gives full content.",
-  args: { url: z.string().describe("URL to open") },
+  args: { url: tool.schema.string().describe("URL to open") },
   async execute(args) {
     const safeUrl = args.url.replace(/'/g, "\\\\'");
     return runPw(\`
@@ -259,8 +389,8 @@ export const open = tool({
 export const screenshot = tool({
   description: "Take a screenshot of a webpage. Returns base64 PNG. Use when visual inspection is needed.",
   args: {
-    url: z.string().describe("URL to screenshot"),
-    fullPage: z.boolean().optional().describe("Capture full page (default: viewport only)"),
+    url: tool.schema.string().describe("URL to screenshot"),
+    fullPage: tool.schema.boolean().optional().describe("Capture full page (default: viewport only)"),
   },
   async execute(args) {
     const safeUrl = args.url.replace(/'/g, "\\\\'");
@@ -275,8 +405,8 @@ export const screenshot = tool({
 export const execute = tool({
   description: "Run custom Playwright script on a page. For advanced automation (click, fill, assert, etc).",
   args: {
-    url: z.string().describe("URL to navigate to"),
-    script: z.string().describe("Playwright page actions (e.g. await page.click('button'); await page.fill('#email', 'test');)"),
+    url: tool.schema.string().describe("URL to navigate to"),
+    script: tool.schema.string().describe("Playwright page actions (e.g. await page.click('button'); await page.fill('#email', 'test');)"),
   },
   async execute(args) {
     const safeUrl = args.url.replace(/'/g, "\\\\'");
@@ -293,12 +423,18 @@ export const execute = tool({
 export const extract = tool({
   description: "Extract structured data from a page using CSS selectors.",
   args: {
-    url: z.string().describe("URL to extract from"),
-    selectors: z.record(z.string()).describe("Map of name to CSS selector, e.g. { title: 'h1', prices: '.price' }"),
+    url: tool.schema.string().describe("URL to extract from"),
+    selectors: tool.schema.string().describe("JSON object mapping field names to CSS selectors, e.g. {\\"title\\":\\"h1\\",\\"prices\\":\\".price\\"}"),
   },
   async execute(args) {
     const safeUrl = args.url.replace(/'/g, "\\\\'");
-    const entries = Object.entries(args.selectors)
+    let selectors;
+    try {
+      selectors = JSON.parse(args.selectors);
+    } catch (err) {
+      return JSON.stringify({ ok: false, error: \`Invalid selectors JSON: \${err.message}\` });
+    }
+    const entries = Object.entries(selectors)
       .map(([k, s]) => \`'\${k}': await page.locator('\${s.replace(/'/g, "\\\\'")}').allInnerTexts().catch(() => [])\`)
       .join(',\\n    ');
     return runPw(\`
@@ -308,10 +444,31 @@ export const extract = tool({
     \`);
   },
 });
-`;
 
-  fs.writeFileSync(path.join(toolsDir, 'browser.ts'), agentBrowserTool);
-  fs.writeFileSync(path.join(toolsDir, 'playwright.ts'), playwrightTool);
+export const pdf = tool({
+  description: "Generate a PDF of a webpage. Returns base64 PDF content.",
+  args: { url: tool.schema.string().describe("URL to render as PDF") },
+  async execute(args) {
+    const safeUrl = args.url.replace(/'/g, "\\\\'");
+    return runPw(\`
+      await page.goto('\${safeUrl}', { waitUntil: 'networkidle', timeout: 20000 });
+      const pdfPath = '/tmp/pw-page.pdf';
+      await page.pdf({ path: pdfPath, format: 'A4' });
+      const b64 = fs.readFileSync(pdfPath).toString('base64');
+      fs.unlinkSync(pdfPath);
+      console.log(JSON.stringify({ ok: true, pdf: b64 }));
+    \`);
+  },
+});
+`;
+}
+
+function installCustomTools(ctx: AgentTurnContext): void {
+  const toolsDir = path.join(WORK_DIR, '.opencode', 'tools');
+  fs.mkdirSync(toolsDir, { recursive: true });
+
+  fs.writeFileSync(path.join(toolsDir, 'browser.ts'), buildAgentBrowserToolSource());
+  fs.writeFileSync(path.join(toolsDir, 'playwright.ts'), buildPlaywrightToolSource());
   ctx.log(`Custom tools installed: browser.ts, playwright.ts`);
 }
 
@@ -397,12 +554,17 @@ async function runOpencodeTurn(
 
     context.log(`Executing: opencode ${args.join(' ').slice(0, 200)}`);
 
-    const { stdout, stderr } = await execFileAsync('opencode', args, {
-      cwd: WORK_DIR,
-      timeout: OPENCODE_TIMEOUT_MS,
-      maxBuffer: MAX_OUTPUT * 2,
-      env,
-    });
+    const { stdout, stderr } = await runCommandWithClosedStdin(
+      'opencode',
+      args,
+      {
+        cwd: WORK_DIR,
+        timeoutMs: OPENCODE_TIMEOUT_MS,
+        maxBuffer: MAX_OUTPUT * 2,
+        env,
+        log: context.log,
+      },
+    );
 
     if (stderr) {
       context.log(`OpenCode stderr: ${stderr.slice(0, 500)}`);

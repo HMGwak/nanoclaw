@@ -12,4 +12,5 @@ export interface DiscordServiceDeploymentSpec {
   responsePolicy?: 'always' | 'optional';
   requiresTrigger?: boolean;
   canStartWorkflow?: boolean;
+  defaultAdditionalMounts?: import('../../types.js').AdditionalMount[];
 }

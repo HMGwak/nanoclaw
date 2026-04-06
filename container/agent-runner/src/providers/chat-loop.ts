@@ -30,6 +30,7 @@ interface RunChatLoopOptions {
   tools?: OpenAI.Chat.Completions.ChatCompletionTool[];
   loopContext: LoopContext;
   maxLoops: number;
+  completionTimeoutMs?: number;
 }
 
 const AGENT_BROWSER_TOOL_NAMES = new Set([
@@ -101,7 +102,15 @@ function validateToolCallOrder(
 export async function runChatCompletionLoop(
   options: RunChatLoopOptions,
 ): Promise<string> {
-  const { client, model, messages, tools, loopContext, maxLoops } = options;
+  const {
+    client,
+    model,
+    messages,
+    tools,
+    loopContext,
+    maxLoops,
+    completionTimeoutMs,
+  } = options;
   let assistantText = '';
   const browserPolicy = parseBrowserPolicy(
     loopContext.env.NANOCLAW_BROWSER_POLICY,
@@ -113,11 +122,25 @@ export async function runChatCompletionLoop(
   };
 
   for (let loop = 0; loop < maxLoops; loop++) {
-    const completion = await client.chat.completions.create({
+    const completionPromise = client.chat.completions.create({
       model,
       messages,
       tools: tools && tools.length > 0 ? tools : undefined,
     });
+    const completion = completionTimeoutMs
+      ? await Promise.race([
+          completionPromise,
+          new Promise<never>((_, reject) => {
+            setTimeout(() => {
+              reject(
+                new Error(
+                  `Chat completion timed out after ${completionTimeoutMs}ms (loop ${loop + 1}/${maxLoops})`,
+                ),
+              );
+            }, completionTimeoutMs);
+          }),
+        ])
+      : await completionPromise;
 
     const choice = completion.choices?.[0];
     if (!choice) {

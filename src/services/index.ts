@@ -1,8 +1,10 @@
+import path from 'path';
+
 import { getAgentSpec } from '../catalog/agents/index.js';
 import { getSdkProfileSpec } from '../catalog/sdk-profiles/index.js';
 import { getToolsetSpec } from '../catalog/toolsets/index.js';
 import { BrowserToolPolicySpec } from '../catalog/toolsets/types.js';
-import { RegisteredGroup, SubAgentConfig } from '../types.js';
+import { AdditionalMount, RegisteredGroup, SubAgentConfig } from '../types.js';
 import { getDiscordDepartmentSpec } from './discord/departments/index.js';
 import { getDiscordDeploymentForGroup } from './discord/deployments.js';
 import { getDiscordPersonnelSpec } from './discord/resources/personnel.js';
@@ -61,6 +63,32 @@ function mergeBrowserPolicyFromSets(
   );
 }
 
+function mergeSkillIdsFromSets(
+  skillSets: Array<string[] | undefined>,
+): string[] {
+  return unique(skillSets.flatMap((entry) => entry || []));
+}
+
+function getMountKey(mount: AdditionalMount): string {
+  return mount.containerPath || path.basename(mount.hostPath);
+}
+
+function mergeAdditionalMounts(
+  serviceMounts: AdditionalMount[] | undefined,
+  groupMounts: AdditionalMount[] | undefined,
+): AdditionalMount[] | undefined {
+  const merged = new Map<string, AdditionalMount>();
+
+  for (const mount of serviceMounts || []) {
+    merged.set(getMountKey(mount), mount);
+  }
+  for (const mount of groupMounts || []) {
+    merged.set(getMountKey(mount), mount);
+  }
+
+  return merged.size > 0 ? [...merged.values()] : undefined;
+}
+
 function resolvePolicyRequiredTools(
   policy: BrowserToolPolicySpec | undefined,
 ): string[] {
@@ -116,6 +144,10 @@ function resolveAgentRuntime(
     ...globalToolsets.map((toolset) => toolset.allowedTools),
     ...localToolsets.map((toolset) => toolset.allowedTools),
   ]);
+  const skillIds = mergeSkillIdsFromSets([
+    ...globalToolsets.map((toolset) => toolset.skillIds),
+    ...localToolsets.map((toolset) => toolset.skillIds),
+  ]);
   const browserPolicy = mergeBrowserPolicyFromSets([
     ...globalToolsets.map((toolset) => toolset.browserPolicy),
     ...localToolsets.map((toolset) => toolset.browserPolicy),
@@ -135,6 +167,7 @@ function resolveAgentRuntime(
     personaPrompt,
     allowedTools,
     toolsetIds: [...globalToolsetIds, ...personnel.localToolsetIds],
+    skillIds,
     flowIds,
     browserPolicy,
   };
@@ -220,6 +253,16 @@ export function resolveServiceDeployment(
   const runtimeAllowedTools = baseAllowedTools
     ? unique([...baseAllowedTools, ...policyRequiredTools])
     : undefined;
+  const runtimeSkillIds = unique(
+    personnel.flatMap((agent) => agent.skillIds || []),
+  );
+  const runtimeAdditionalMounts =
+    group.folder === 'main'
+      ? group.containerConfig?.additionalMounts
+      : mergeAdditionalMounts(
+          discordDeployment.defaultAdditionalMounts,
+          group.containerConfig?.additionalMounts,
+        );
 
   return {
     id: discordDeployment.id,
@@ -248,7 +291,7 @@ export function resolveServiceDeployment(
     flowIds: [...discordDeployment.flowIds],
     canStartWorkflow: discordDeployment.canStartWorkflow === true,
     containerRuntime: {
-      additionalMounts: group.containerConfig?.additionalMounts,
+      additionalMounts: runtimeAdditionalMounts,
       timeout: group.containerConfig?.timeout,
       backend: group.containerConfig?.backend,
       allowedTools: runtimeAllowedTools,
@@ -256,6 +299,7 @@ export function resolveServiceDeployment(
       apiKey: group.containerConfig?.apiKey,
       baseUrl: group.containerConfig?.baseUrl,
       browserPolicy: lead?.browserPolicy,
+      skillIds: runtimeSkillIds,
     },
   };
 }

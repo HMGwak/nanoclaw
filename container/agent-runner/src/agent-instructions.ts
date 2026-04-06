@@ -94,15 +94,54 @@ function summarizeSkillBody(body: string): string {
   return summaryLines.join(' ');
 }
 
-export function buildSharedSkillsInfo(): string | null {
+function buildMountedDirectoriesInfo(
+  containerInput: ContainerInput,
+): string | null {
+  const mountedDirectories = containerInput.mountedDirectories || [];
+  if (mountedDirectories.length === 0) return null;
+
+  const lines = mountedDirectories.map(
+    (mount) => `- \`${mount.path}\` (${mount.readonly ? 'read-only' : 'read-write'})`,
+  );
+  const hasObsidianSkills = (containerInput.skillIds || []).some((skillId) =>
+    skillId.startsWith('obsidian-'),
+  );
+
+  if (hasObsidianSkills) {
+    lines.push(
+      '- Prefer targeted file discovery with `shell` + `rg`, `find`, `sed -n`, and `cat` instead of reading the whole vault.',
+      '- Start with `rg -n` or `rg --files` against the mounted vault to find relevant notes before opening any file.',
+      '- Avoid broad directory walks and avoid `.base` files unless the user explicitly asks for them.',
+      '- Do not attempt to use the Obsidian desktop CLI in this runtime.',
+      '- Work directly on the mounted vault files with `shell` commands and the shared Obsidian formatting guidance.',
+    );
+  }
+
+  return [
+    '## Mounted Directories',
+    '',
+    'These host directories are mounted into the current container runtime:',
+    '',
+    ...lines,
+  ].join('\n');
+}
+
+export function buildSharedSkillsInfo(
+  allowedSkillIds?: string[],
+): string | null {
   try {
     if (!fs.existsSync(SHARED_SKILLS_DIR)) return null;
+    const allowedSet =
+      allowedSkillIds && allowedSkillIds.length > 0
+        ? new Set(allowedSkillIds)
+        : null;
     const entries = fs
       .readdirSync(SHARED_SKILLS_DIR)
       .map((dir) => path.join(SHARED_SKILLS_DIR, dir, 'SKILL.md'))
       .filter((skillPath) => fs.existsSync(skillPath))
       .map((skillPath) => parseSkillFile(skillPath))
-      .filter((skill): skill is SkillMetadata => skill !== null);
+      .filter((skill): skill is SkillMetadata => skill !== null)
+      .filter((skill) => !allowedSet || allowedSet.has(skill.name));
 
     if (entries.length === 0) return null;
 
@@ -201,12 +240,17 @@ export function buildInstructionSections(opts: {
     }
   }
 
+  const mountedDirectories = buildMountedDirectoriesInfo(opts.containerInput);
+  if (mountedDirectories) {
+    sections.push({ id: 'mounted-directories', content: mountedDirectories });
+  }
+
   const teamInfo = buildTeamInfo();
   if (teamInfo) {
     sections.push({ id: 'team-info', content: teamInfo });
   }
 
-  const sharedSkills = buildSharedSkillsInfo();
+  const sharedSkills = buildSharedSkillsInfo(opts.containerInput.skillIds);
   if (sharedSkills) {
     sections.push({ id: 'shared-skills', content: sharedSkills });
   }

@@ -25,6 +25,7 @@ function toDeploymentSpec(
     responsePolicy: binding.responsePolicy,
     requiresTrigger: binding.requiresTrigger,
     canStartWorkflow: binding.canStartWorkflow,
+    defaultAdditionalMounts: binding.defaultAdditionalMounts,
   };
 }
 

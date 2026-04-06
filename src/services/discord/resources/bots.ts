@@ -1,3 +1,4 @@
+import { AdditionalMount } from '../../../types.js';
 import { DiscordDepartmentId } from '../departments/index.js';
 
 export type DiscordBotResponsePolicy = 'always' | 'optional';
@@ -14,7 +15,12 @@ export interface DiscordBotResourceSpec {
   responsePolicy: DiscordBotResponsePolicy;
   requiresTrigger: boolean;
   canStartWorkflow?: boolean;
+  defaultAdditionalMounts?: AdditionalMount[];
 }
+
+const SECRETARY_OBSIDIAN_VAULT_HOST_PATH =
+  process.env.NANOCLAW_SECRETARY_OBSIDIAN_VAULT_PATH?.trim() ||
+  '/Users/planee/Documents/Mywork';
 
 const DISCORD_BOT_RESOURCES: DiscordBotResourceSpec[] = [
   {
@@ -64,6 +70,13 @@ const DISCORD_BOT_RESOURCES: DiscordBotResourceSpec[] = [
     personaMode: 'bot_only',
     responsePolicy: 'always',
     requiresTrigger: false,
+    defaultAdditionalMounts: [
+      {
+        hostPath: SECRETARY_OBSIDIAN_VAULT_HOST_PATH,
+        containerPath: 'obsidian-vault',
+        readonly: false,
+      },
+    ],
   },
 ];
 

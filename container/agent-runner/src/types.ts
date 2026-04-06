@@ -27,6 +27,13 @@ export interface ContainerInput {
   instructionLayers?: InstructionLayer[];
   /** Sub-agents available via ask_agent MCP tool. */
   subAgents?: SubAgentEntry[];
+  /** Shared skill docs relevant to this runtime. */
+  skillIds?: string[];
+  /** Extra directories mounted under /workspace/extra for this run. */
+  mountedDirectories?: Array<{
+    path: string;
+    readonly: boolean;
+  }>;
 }
 
 export interface ContainerOutput {

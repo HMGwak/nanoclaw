@@ -6,6 +6,15 @@ import { spawn } from 'child_process';
 // Sentinel markers must match container-runner.ts
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
+const { validateAdditionalMountsMock } = vi.hoisted(() => ({
+  validateAdditionalMountsMock: vi.fn<
+    (...args: unknown[]) => Array<{
+      hostPath: string;
+      containerPath: string;
+      readonly: boolean;
+    }>
+  >(() => []),
+}));
 
 // Mock config
 vi.mock('./config.js', () => ({
@@ -74,7 +83,7 @@ vi.mock('fs', async () => {
 
 // Mock mount-security
 vi.mock('./mount-security.js', () => ({
-  validateAdditionalMounts: vi.fn(() => []),
+  validateAdditionalMounts: validateAdditionalMountsMock,
 }));
 
 // Mock OneCLI SDK
@@ -160,6 +169,8 @@ describe('container-runner timeout behavior', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    validateAdditionalMountsMock.mockReset();
+    validateAdditionalMountsMock.mockReturnValue([]);
   });
 
   it('timeout after output resolves as success', async () => {
@@ -415,6 +426,51 @@ describe('container instruction layers', () => {
     expect(policyArg).toContain(
       '"chain":["cloudflare_fetch","agent_browser","playwright"]',
     );
+
+    emitOutputMarker(fakeProc, { status: 'success', result: 'ok' });
+    fakeProc.emit('close', 0);
+    await resultPromise;
+  });
+
+  it('passes secretary skill ids and validated mounted directories into the container input', async () => {
+    let stdinData = '';
+    fakeProc = createFakeProcess();
+    fakeProc.stdin.on('data', (chunk) => {
+      stdinData += chunk.toString();
+    });
+    validateAdditionalMountsMock.mockReturnValueOnce([
+      {
+        hostPath: '/Users/planee/Documents/Mywork',
+        containerPath: '/workspace/extra/obsidian-vault',
+        readonly: true,
+      },
+    ]);
+
+    const resultPromise = runContainerAgent(
+      {
+        ...testGroup,
+        folder: 'discord_secretary',
+        name: '비서실',
+      },
+      {
+        ...testInput,
+        groupFolder: 'discord_secretary',
+      },
+      () => {},
+      async () => {},
+    );
+    await new Promise<void>((resolve) => fakeProc.stdin.on('finish', resolve));
+
+    const containerInput = JSON.parse(stdinData);
+    expect(containerInput.skillIds).toEqual(
+      expect.arrayContaining(['agent-browser', 'obsidian-markdown']),
+    );
+    expect(containerInput.mountedDirectories).toEqual([
+      {
+        path: '/workspace/extra/obsidian-vault',
+        readonly: true,
+      },
+    ]);
 
     emitOutputMarker(fakeProc, { status: 'success', result: 'ok' });
     fakeProc.emit('close', 0);

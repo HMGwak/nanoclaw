@@ -10,13 +10,12 @@ const TOOLSETS: Record<string, ToolsetSpec> = {
   obsidian_vault_tools: {
     id: 'obsidian_vault_tools',
     description:
-      'Obsidian vault tools for creating and editing Markdown notes, Bases, Canvas files, and CLI interaction.',
+      'Obsidian vault tools for creating and editing Markdown notes, Bases, and Canvas files through mounted vault access.',
     allowedTools: null,
     skillIds: [
       'obsidian-markdown',
       'obsidian-bases',
       'obsidian-canvas',
-      'obsidian-cli',
       'defuddle',
     ],
     sourceModuleIds: ['obsidian_skills'],

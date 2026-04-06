@@ -38,8 +38,14 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/b
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Install agent-browser, claude-code, and opencode globally
-RUN npm install -g agent-browser @anthropic-ai/claude-code opencode-ai@latest
+ARG OPENCODE_VERSION=1.3.13
+
+# Install agent-browser, claude-code, and OpenCode at a pinned version so
+# custom tool loading stays reproducible across rebuilds.
+RUN npm install -g \
+    agent-browser \
+    @anthropic-ai/claude-code \
+    opencode-ai@${OPENCODE_VERSION}
 
 # Create app directory
 WORKDIR /app
