@@ -8,6 +8,7 @@ agent generates and revises.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -25,13 +26,13 @@ try:
     from .synthesizer import ChunkedSynthesizer
     from .wiki_tracker import WikiTracker
     from .json_utils import extract_json, parse_validated, parse_validated_list, try_parse_validated
-    from .markdown_utils import MarkdownSectionEditor, SectionEdit
+    from .markdown_utils import MarkdownSectionEditor, SectionEdit, md_to_json, json_to_md, apply_json_diffs, MdNode, MdDiff, strip_code_blocks, filter_attachment_footnotes
 except ImportError:
     from base_index import BaseIndexParser  # type: ignore[no-redef]
     from synthesizer import ChunkedSynthesizer  # type: ignore[no-redef]
     from wiki_tracker import WikiTracker  # type: ignore[no-redef]
     from json_utils import extract_json, parse_validated, parse_validated_list, try_parse_validated  # type: ignore[no-redef]
-    from markdown_utils import MarkdownSectionEditor, SectionEdit  # type: ignore[no-redef]
+    from markdown_utils import MarkdownSectionEditor, SectionEdit, md_to_json, json_to_md, apply_json_diffs, MdNode, MdDiff, strip_code_blocks, filter_attachment_footnotes  # type: ignore[no-redef]
 
 
 class WikiMatchDecision(BaseModel):
@@ -203,40 +204,24 @@ REVISE_BASE_INSTRUCTIONS = """\
 피드백을 반영하여 wiki note의 특정 부분만 수정합니다.
 
 규칙:
-1. 전체 문서를 다시 작성하지 말 것 — 수정이 필요한 부분만 섹션 단위로 수정할 것
+1. 전체 문서를 다시 작성하지 말 것 — 수정이 필요한 부분만 diff로 수정할 것
 2. raw 문서에 없는 내용을 절대 추가하지 말 것 (hallucination 금지)
 3. 각 개선 사항에 대해 raw 출처 각주를 반드시 달 것
 
+기존 wiki가 JSON 노드 배열로 제공됩니다. 각 노드는 {id, type, content, parent, indent}를 가집니다.
+
 수정 방식 (JSON 배열):
-- replace_section: 특정 섹션의 본문 내용을 교체 (제목은 유지)
-- add_section: 새로운 섹션을 특정 섹션 뒤에 추가 (부모 섹션 경로 지정)
-- append_to: 특정 섹션의 끝에 내용을 추가
-
-응답 형식:
-```json
 [
-  {
-    "action": "replace_section",
-    "heading_path": "## 섹션1 > ### 서브섹션1.1",
-    "content": "교체할 새 본문 내용 (각주 포함)"
-  },
-  {
-    "action": "add_section",
-    "parent_heading_path": "## 섹션1",
-    "new_heading": "### 신규 서브섹션",
-    "content": "신규 섹션의 내용"
-  },
-  {
-    "action": "append_to",
-    "heading_path": "## 섹션2",
-    "content": "추가할 내용"
-  }
+  {"action": "update", "id": 3, "content": "수정된 내용"},
+  {"action": "insert_after", "id": 7, "type": "paragraph", "parent": 2, "content": "새 문단"},
+  {"action": "append_child", "parent": 5, "type": "list", "indent": 0, "content": "새 항목[^4]"},
+  {"action": "delete", "id": 10}
 ]
-```
 
-주의:
-- heading_path는 '## 제목1 > ### 제목2' 와 같은 형식으로 정확히 지정할 것
-- content에는 마크다운 문법을 사용할 수 있음
+규칙:
+- id로 정확한 노드 지정 (줄번호나 텍스트 매칭 아님)
+- 변경이 필요한 부분만 diff로 제시
+- 기존 구조를 최대한 유지
 """
 
 REVISE_SYSTEM_PROMPT_IMPROVE = REVISE_BASE_INSTRUCTIONS + """\
@@ -383,8 +368,10 @@ class WikiTask:
                 user_prompt=revision_prompt,
             )
 
-            # Apply section-based diffs to existing wiki
+            # Apply JSON node diffs to existing wiki
             revised = self._apply_section_diffs(existing_wiki, diff_response)
+            revised = strip_code_blocks(revised)
+            revised = filter_attachment_footnotes(revised)
 
             out_path = context.output_dir / prev_file.name
             out_path.write_text(revised, encoding="utf-8")
@@ -409,45 +396,18 @@ class WikiTask:
         return REVISE_SYSTEM_PROMPT_IMPROVE
 
     def _apply_section_diffs(self, original: str, response: str) -> str:
-        """Apply section-based edits from LLM JSON response."""
+        """Apply JSON node diffs from LLM response."""
+        nodes = md_to_json(original)
         try:
-            edits = parse_validated_list(response, SectionEdit)
+            diffs = parse_validated_list(response, MdDiff)
         except ValueError:
-            logger.warning("Section diff parse failed, keeping original")
+            logger.warning("MdDiff parse failed, keeping original")
             return original
-
-        if not edits:
-            logger.warning("Section diff response is not a list or is empty")
+        if not diffs:
+            logger.warning("MdDiff response is not a list or is empty")
             return original
-
-        editor = MarkdownSectionEditor(original)
-        applied = 0
-        for i, edit in enumerate(edits):
-            success = False
-
-            if edit.action == "replace_section":
-                success = editor.replace_section(
-                    edit.heading_path or "", edit.content
-                )
-            elif edit.action == "append_to":
-                success = editor.append_to_section(
-                    edit.heading_path or "", edit.content
-                )
-            elif edit.action == "add_section":
-                success = editor.add_section(
-                    edit.parent_heading_path or "",
-                    edit.new_heading or "",
-                    edit.content,
-                )
-
-            if success:
-                applied += 1
-            else:
-                logger.warning("Edit #%d (%s) failed for path: %s",
-                               i, edit.action, edit.heading_path or edit.parent_heading_path)
-
-        logger.info("Applied %d/%d section edits", applied, len(edits))
-        return editor.get_content() if applied > 0 else original
+        updated = apply_json_diffs(nodes, diffs)
+        return json_to_md(updated)
 
     def _load_existing_wiki(self, reference_files: list[Path], domain: str) -> str | None:
         """Find and return the existing wiki note for domain, or None."""
@@ -477,7 +437,9 @@ class WikiTask:
         feedback,
         reference_files: list[Path],
     ) -> str:
-        lines = [f"현재 wiki note 본문:\n{content}\n"]
+        nodes = md_to_json(content)
+        nodes_json = json.dumps([n.model_dump() for n in nodes], ensure_ascii=False, indent=2)
+        lines = [f"현재 wiki note (JSON 노드):\n{nodes_json}\n"]
         lines.append(f"총점: {feedback.total_score}\n")
 
         if feedback.hard_gate_failures:
