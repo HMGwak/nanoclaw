@@ -302,6 +302,11 @@ class WikiTask:
         vault_root = Path(context.config.get("vault_root", ""))
         filter_pattern = context.config.get("filter")
 
+        # wiki_output_dir is required
+        wiki_output_dir = context.config.get("wiki_output_dir")
+        if not wiki_output_dir:
+            raise ValueError("wiki_output_dir is required in context_config")
+
         # 1. Discover inputs (or use pre-filtered docs)
         prefilled = context.config.get("prefilled_docs")
         if prefilled:

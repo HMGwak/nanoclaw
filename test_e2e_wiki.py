@@ -52,6 +52,7 @@ report = run_loop(
         "base_path": str(BASE_PATH),
         "vault_root": str(VAULT),
         "filter": "(안전성검토)_*.md",
+        "wiki_output_dir": str(WIKI_DIR),
         "max_docs": 150,  # 5 batches × 30 docs (gpt-5.4)
     },
 )
