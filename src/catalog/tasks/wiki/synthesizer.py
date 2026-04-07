@@ -278,7 +278,7 @@ class ChunkedSynthesizer:
             if self._vault_root:
                 linked = _resolve_wikilinks(content, self._vault_root, max_depth=2)
                 for link_path, link_content in linked:
-                    parts.append(f"--- [linked] {link_path.name} ---\n{link_content}")
+                    parts.append(f"--- [참조됨: {path.name} → {link_path.name}] ---\n{link_content}")
 
         return "\n\n".join(parts)
 
@@ -399,8 +399,6 @@ class ChunkedSynthesizer:
 # ── Wikilink resolution ──────────────────────────────────────────
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]")
-_PDF_EXTENSIONS = {".pdf"}
-_TEXT_EXTENSIONS = {".md", ".txt"}
 
 
 def _resolve_wikilinks(
@@ -410,10 +408,9 @@ def _resolve_wikilinks(
     _depth: int = 0,
     _seen: set[str] | None = None,
 ) -> list[tuple[Path, str]]:
-    """Follow Obsidian wikilinks and return (path, content) pairs.
+    """Follow Obsidian wikilinks to .md files and return (path, content) pairs.
 
-    - .md/.txt files are read directly
-    - .pdf files are extracted via pdftotext (if available)
+    - Only .md files are followed (non-md links are skipped)
     - Recurses up to max_depth levels
     - Deduplicates by filename to avoid cycles
     """
@@ -431,62 +428,35 @@ def _resolve_wikilinks(
             continue
         _seen.add(link_name)
 
-        # Resolve path in vault
         resolved = _find_in_vault(link_name, vault_root)
-        if resolved is None:
+        if resolved is None or resolved.suffix.lower() != ".md":
             continue
 
-        suffix = resolved.suffix.lower()
-        if suffix in _TEXT_EXTENSIONS:
-            try:
-                text = resolved.read_text(encoding="utf-8")
-                results.append((resolved, text))
-                # Recurse into linked .md
-                if _depth + 1 < max_depth:
-                    results.extend(
-                        _resolve_wikilinks(text, vault_root, max_depth, _depth + 1, _seen)
-                    )
-            except Exception as exc:
-                logger.debug("Cannot read linked %s: %s", resolved, exc)
-
-        elif suffix in _PDF_EXTENSIONS:
-            text = _extract_pdf_text(resolved)
-            if text:
-                results.append((resolved, text))
+        try:
+            text = resolved.read_text(encoding="utf-8")
+            results.append((resolved, text))
+            if _depth + 1 < max_depth:
+                results.extend(
+                    _resolve_wikilinks(text, vault_root, max_depth, _depth + 1, _seen)
+                )
+        except Exception as exc:
+            logger.debug("Cannot read linked %s: %s", resolved, exc)
 
     return results
 
 
 def _find_in_vault(name: str, vault_root: Path) -> Path | None:
     """Find a file by name in the vault (Obsidian-style shortest match)."""
-    # Add .md if no extension
     if "." not in name.split("/")[-1]:
         name += ".md"
 
-    # Direct path check
     direct = vault_root / name
     if direct.exists():
         return direct
 
-    # Search by filename
     target = name.split("/")[-1]
     matches = list(vault_root.rglob(target))
     return matches[0] if matches else None
-
-
-def _extract_pdf_text(path: Path) -> str:
-    """Extract text from PDF via pdftotext CLI."""
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["pdftotext", str(path), "-"],
-            capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-    return ""
 
 
 # ── Module-level helpers ──────────────────────────────────────────
