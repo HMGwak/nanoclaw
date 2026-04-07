@@ -45,11 +45,12 @@ rubric 파일에서 확인하거나, base 파일명에서 유추.
 모르면 사용자에게 물어봐라: "어떤 파일 패턴을 대상으로 할까요? (예: `(안전성검토)_*.md`)"
 
 #### wiki_output_dir (저장 경로)
-사용자 요청에 경로가 있으면 사용. **없으면 반드시 사용자에게 물어봐라:**
-"완성된 wiki를 어느 폴더에 저장할까요? (Obsidian vault 내 경로)"
+사용자 요청에 경로가 있으면 사용. 없으면 사용자에게 물어봐라.
+저장 경로는 `/Users/planee/Documents/Mywork` 하위 폴더일 가능성이 높다.
+예: `/Users/planee/Documents/Mywork/3. Resource/LLM Knowledge Base/wiki/안전성검토`
 
 #### vault_root
-항상 `/Users/planee/Documents/Mywork` (호스트 경로 — 변경하지 말 것)
+항상 `/Users/planee/Documents/Mywork` (호스트 절대경로 — 변경하지 말 것)
 
 ### 2단계: start_workflow 호출
 

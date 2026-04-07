@@ -751,7 +751,7 @@ if (canStartWorkflow) {
 
 // Safe read-only shell tool
 const SAFE_SHELL_ALLOWED = /^(python3?|ls|find|cat|head|tail|grep|echo|which|wc|stat|file)\b/;
-const SAFE_SHELL_BLOCKED = /\brm\b|\brmdir\b|\bmv\b|\bcp\b|\bchmod\b|\bchown\b|\bdd\b|\bmkfs\b|\btruncate\b|>|>>|\btee\b/;
+const SAFE_SHELL_BLOCKED = /\brm\b|\brmdir\b|\bmv\b|\bcp\b|\bchmod\b|\bchown\b|\bdd\b|\bmkfs\b|\btruncate\b|>|>>|\btee\b|\bsqlite3\b|\bsql\b|\bDROP\b|\bDELETE\b|\bTRUNCATE\b/i;
 
 server.registerTool(
   'safe_shell',
