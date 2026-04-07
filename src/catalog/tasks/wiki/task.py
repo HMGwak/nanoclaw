@@ -323,7 +323,7 @@ class WikiTask:
 
         # 3. Synthesize
         doc_structure = context.config.get("doc_structure")
-        synthesizer = ChunkedSynthesizer(self.agent, doc_structure=doc_structure)
+        synthesizer = ChunkedSynthesizer(self.agent, doc_structure=doc_structure, vault_root=vault_root)
         existing_wiki = self._load_existing_wiki(context.reference_files, domain)
         docs_to_process = new + changed
         wiki_content, succeeded_docs = synthesizer.synthesize(docs_to_process, existing_wiki, domain)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -168,9 +169,10 @@ class ChunkedSynthesizer:
         batch_size: Number of documents processed per map step.
     """
 
-    def __init__(self, agent, batch_size: int = 10, doc_structure: list[str] | None = None) -> None:
+    def __init__(self, agent, batch_size: int = 10, doc_structure: list[str] | None = None, vault_root: Path | None = None) -> None:
         self.agent = agent
         self.doc_structure = doc_structure
+        self._vault_root = vault_root
 
         # Adaptive batch size based on model
         model_name = getattr(agent, "model", "").lower()
@@ -271,6 +273,13 @@ class ChunkedSynthesizer:
                 logger.warning("Cannot read %s: %s", path, exc)
                 content = "(읽기 실패)"
             parts.append(f"--- {path.name} ---\n{content}")
+
+            # Follow wikilinks up to max_depth=2
+            if self._vault_root:
+                linked = _resolve_wikilinks(content, self._vault_root, max_depth=2)
+                for link_path, link_content in linked:
+                    parts.append(f"--- [linked] {link_path.name} ---\n{link_content}")
+
         return "\n\n".join(parts)
 
     def _parse_map_response(self, response: str, batch: list[Path]) -> dict:
@@ -385,6 +394,99 @@ class ChunkedSynthesizer:
     @staticmethod
     def _batch(items: list[Path], size: int) -> list[list[Path]]:
         return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+# ── Wikilink resolution ──────────────────────────────────────────
+
+_WIKILINK_RE = re.compile(r"\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]")
+_PDF_EXTENSIONS = {".pdf"}
+_TEXT_EXTENSIONS = {".md", ".txt"}
+
+
+def _resolve_wikilinks(
+    content: str,
+    vault_root: Path,
+    max_depth: int = 2,
+    _depth: int = 0,
+    _seen: set[str] | None = None,
+) -> list[tuple[Path, str]]:
+    """Follow Obsidian wikilinks and return (path, content) pairs.
+
+    - .md/.txt files are read directly
+    - .pdf files are extracted via pdftotext (if available)
+    - Recurses up to max_depth levels
+    - Deduplicates by filename to avoid cycles
+    """
+    if _depth >= max_depth:
+        return []
+    if _seen is None:
+        _seen = set()
+
+    results: list[tuple[Path, str]] = []
+    links = _WIKILINK_RE.findall(content)
+
+    for link_name in links:
+        link_name = link_name.strip()
+        if link_name in _seen:
+            continue
+        _seen.add(link_name)
+
+        # Resolve path in vault
+        resolved = _find_in_vault(link_name, vault_root)
+        if resolved is None:
+            continue
+
+        suffix = resolved.suffix.lower()
+        if suffix in _TEXT_EXTENSIONS:
+            try:
+                text = resolved.read_text(encoding="utf-8")
+                results.append((resolved, text))
+                # Recurse into linked .md
+                if _depth + 1 < max_depth:
+                    results.extend(
+                        _resolve_wikilinks(text, vault_root, max_depth, _depth + 1, _seen)
+                    )
+            except Exception as exc:
+                logger.debug("Cannot read linked %s: %s", resolved, exc)
+
+        elif suffix in _PDF_EXTENSIONS:
+            text = _extract_pdf_text(resolved)
+            if text:
+                results.append((resolved, text))
+
+    return results
+
+
+def _find_in_vault(name: str, vault_root: Path) -> Path | None:
+    """Find a file by name in the vault (Obsidian-style shortest match)."""
+    # Add .md if no extension
+    if "." not in name.split("/")[-1]:
+        name += ".md"
+
+    # Direct path check
+    direct = vault_root / name
+    if direct.exists():
+        return direct
+
+    # Search by filename
+    target = name.split("/")[-1]
+    matches = list(vault_root.rglob(target))
+    return matches[0] if matches else None
+
+
+def _extract_pdf_text(path: Path) -> str:
+    """Extract text from PDF via pdftotext CLI."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["pdftotext", str(path), "-"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return ""
 
 
 # ── Module-level helpers ──────────────────────────────────────────
