@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -62,26 +63,59 @@ logger = logging.getLogger(__name__)
 
 # ── Local Gemma ──────────────────────────────────────────────────
 GEMMA_SCRIPT = Path.home() / "Automation" / "local_llm_model" / "run_local_gemma.sh"
+GEMMA_MODEL_DIR = Path.home() / "Automation" / "local_llm_model"
 GEMMA_MODELS = {"gemma4-26b": "26b", "gemma4-e4b": "e4b", "qwen3.5-9b": "qwen"}
+GEMMA_MODEL_PATHS = {
+    "26b": GEMMA_MODEL_DIR / "gemma4-26b-a4b-it-4bit",
+    "e4b": GEMMA_MODEL_DIR / "gemma4-e4b-it-8bit",
+    "qwen": GEMMA_MODEL_DIR / "qwen3.5-9b-8bit",
+}
+
+# Cache loaded models to avoid reloading between calls
+_loaded_models: dict[str, tuple] = {}
 
 
 class LocalGemmaAgent:
-    """Local Gemma4 agent via subprocess."""
+    """Local LLM agent via mlx_lm Python API (no subprocess)."""
 
     def __init__(self, model: str = "gemma4-26b"):
         self.model_key = GEMMA_MODELS.get(model, "26b")
         self.model = model
+        self._max_tokens = int(os.environ.get("GEMMA_MAX_TOKENS", "256"))
+
+    def _get_model(self):
+        """Load model and tokenizer (cached)."""
+        if self.model_key not in _loaded_models:
+            from mlx_lm import load
+            model_path = str(GEMMA_MODEL_PATHS[self.model_key])
+            logger.info("Loading local model: %s", model_path)
+            model, tokenizer = load(model_path)
+            _loaded_models[self.model_key] = (model, tokenizer)
+        return _loaded_models[self.model_key]
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
-        prompt = f"{system_prompt}\n\n{user_prompt}"
-        result = subprocess.run(
-            [str(GEMMA_SCRIPT), self.model_key, "generate", prompt],
-            capture_output=True, text=True, timeout=600,
+        from mlx_lm import generate as mlx_generate
+        from mlx_lm.sample_utils import make_sampler
+        model, tokenizer = self._get_model()
+
+        # Use chat template if available
+        if hasattr(tokenizer, 'apply_chat_template'):
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+            prompt = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+        else:
+            prompt = f"{system_prompt}\n\n{user_prompt}"
+
+        sampler = make_sampler(temp=0.7, top_p=0.9)
+        result = mlx_generate(
+            model, tokenizer, prompt=prompt,
+            max_tokens=self._max_tokens, sampler=sampler, verbose=False,
         )
-        if result.returncode != 0:
-            raise RuntimeError(f"Gemma failed (exit {result.returncode})")
-        parts = result.stdout.split("==========")
-        return parts[1].strip() if len(parts) >= 2 else result.stdout.strip()
+        return result.strip()
 
 
 # ── Agent ────────────────────────────────────────────────────────
@@ -292,7 +326,7 @@ class WikiTask:
         synthesizer = ChunkedSynthesizer(self.agent, doc_structure=doc_structure)
         existing_wiki = self._load_existing_wiki(context.reference_files, domain)
         docs_to_process = new + changed
-        wiki_content = synthesizer.synthesize(docs_to_process, existing_wiki, domain)
+        wiki_content, succeeded_docs = synthesizer.synthesize(docs_to_process, existing_wiki, domain)
 
         # 4. Save (DB tracking deferred to engine after keep/converged verdict)
         context.output_dir.mkdir(parents=True, exist_ok=True)
@@ -305,7 +339,7 @@ class WikiTask:
                 "domain": domain,
                 "base_path": str(base_path),
                 "filter_pattern": filter_pattern,
-                "all_docs": [str(p) for p in all_docs],
+                "all_docs": succeeded_docs,  # only successfully processed docs
                 "docs_processed": [str(p) for p in docs_to_process],
             },
         )

@@ -191,7 +191,7 @@ class ChunkedSynthesizer:
         existing_wiki: str | None = None,
         domain: str = "",
         reference_files: list[Path] | None = None,
-    ) -> str:
+    ) -> tuple[str, list[str]]:
         """Synthesize docs into a wiki note via map-reduce.
 
         Args:
@@ -204,16 +204,19 @@ class ChunkedSynthesizer:
                              in docs).
 
         Returns:
-            Synthesized wiki note as a Markdown string.
+            Tuple of (wiki markdown string, list of successfully processed doc paths).
         """
         if not docs:
             logger.warning("synthesize() called with empty docs list")
-            return existing_wiki or ""
+            return (existing_wiki or "", [])
 
         # Map phase - processes all docs in batches
         extractions = self._map(docs)
         if not extractions:
-            return existing_wiki or ""
+            return (existing_wiki or "", [])
+
+        # Track successfully processed docs
+        self._succeeded_docs: list[str] = []
 
         # Reduce phase - iterative update to avoid model degradation
         if existing_wiki:
@@ -223,17 +226,22 @@ class ChunkedSynthesizer:
             logger.info("Creating initial wiki from first batch")
             first_batch_docs = docs[:self.batch_size]
             wiki = self._create_reduce([extractions[0]], first_batch_docs, domain)
-            
+            # First batch create is always counted as success if map succeeded
+            if extractions[0].get("_map_ok", True):
+                self._succeeded_docs.extend(extractions[0].get("_source_paths", []))
+
             if len(extractions) > 1:
                 logger.info("Iteratively updating wiki with remaining %d batches", len(extractions) - 1)
                 remaining_docs = docs[self.batch_size:]
                 wiki = self._update_reduce(extractions[1:], wiki, remaining_docs, domain)
-            
+
         # Post-processing
         wiki = strip_code_blocks(wiki)
         wiki = filter_attachment_footnotes(wiki)
-        
-        return wiki
+
+        succeeded = list(self._succeeded_docs)
+        logger.info("Successfully processed %d/%d docs", len(succeeded), len(docs))
+        return (wiki, succeeded)
 
     # ── Map phase ─────────────────────────────────────────────────
 
@@ -268,10 +276,13 @@ class ChunkedSynthesizer:
     def _parse_map_response(self, response: str, batch: list[Path]) -> dict:
         """Parse LLM JSON response; fall back to empty structure on error."""
         sources = [p.name for p in batch]
+        source_paths = [str(p) for p in batch]
         extraction = try_parse_validated(response, MapExtraction)
         if extraction:
             data = extraction.model_dump()
             data["_sources"] = sources
+            data["_source_paths"] = source_paths
+            data["_map_ok"] = True
             return data
         else:
             logger.warning("Map response parse failed, using empty extraction")
@@ -282,6 +293,8 @@ class ChunkedSynthesizer:
                 "사례별_특이점": [],
                 "주요_키워드": [],
                 "_sources": sources,
+                "_source_paths": source_paths,
+                "_map_ok": False,
             }
 
     # ── Reduce phase ──────────────────────────────────────────────
@@ -330,7 +343,12 @@ class ChunkedSynthesizer:
             )
 
             # Apply JSON node diffs to current wiki
+            prev_wiki = current_wiki
             current_wiki = self._apply_section_diffs(current_wiki, diff_response)
+
+            # Track success: wiki changed means diffs were applied
+            if current_wiki != prev_wiki and ext.get("_map_ok", True):
+                self._succeeded_docs.extend(ext.get("_source_paths", []))
 
         return current_wiki
 
