@@ -63,6 +63,7 @@ export interface ContainerInput {
     allowedTools?: string[];
   }>;
   skillIds?: string[];
+  canStartWorkflow?: boolean;
   mountedDirectories?: Array<{
     path: string;
     readonly: boolean;
@@ -621,6 +622,9 @@ export async function runContainerAgent(
     const deployment = resolveServiceDeployment(group);
     if (deployment?.containerRuntime.skillIds?.length) {
       containerInput.skillIds = deployment.containerRuntime.skillIds;
+    }
+    if (deployment?.canStartWorkflow) {
+      containerInput.canStartWorkflow = true;
     }
     const mountedDirectories = mounts
       .filter((mount) => mount.containerPath.startsWith('/workspace/extra/'))

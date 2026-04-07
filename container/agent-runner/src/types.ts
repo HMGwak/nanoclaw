@@ -29,6 +29,8 @@ export interface ContainerInput {
   subAgents?: SubAgentEntry[];
   /** Shared skill docs relevant to this runtime. */
   skillIds?: string[];
+  /** Whether this agent can start workflows via IPC. */
+  canStartWorkflow?: boolean;
   /** Extra directories mounted under /workspace/extra for this run. */
   mountedDirectories?: Array<{
     path: string;

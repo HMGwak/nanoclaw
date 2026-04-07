@@ -206,6 +206,7 @@ function writeConfig(
           NANOCLAW_CHAT_JID: ctx.containerInput.chatJid,
           NANOCLAW_GROUP_FOLDER: ctx.containerInput.groupFolder,
           NANOCLAW_IS_MAIN: ctx.containerInput.isMain ? '1' : '0',
+          NANOCLAW_CAN_START_WORKFLOW: ctx.containerInput.canStartWorkflow ? '1' : '0',
         },
       },
     },

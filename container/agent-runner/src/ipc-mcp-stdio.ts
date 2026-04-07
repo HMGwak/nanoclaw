@@ -45,17 +45,20 @@ const server = new McpServer({
   version: '1.0.0',
 });
 
-server.tool(
+server.registerTool(
   'send_message',
-  "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times.",
   {
-    text: z.string().describe('The message text to send'),
-    sender: z
-      .string()
-      .optional()
-      .describe(
-        'Your role/identity name (e.g. "Researcher"). On Discord, this may appear as a webhook persona; on other channels it may be ignored.',
-      ),
+    description:
+      "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times.",
+    inputSchema: {
+      text: z.string().describe('The message text to send'),
+      sender: z
+        .string()
+        .optional()
+        .describe(
+          'Your role/identity name (e.g. "Researcher"). On Discord, this may appear as a webhook persona; on other channels it may be ignored.',
+        ),
+    },
   },
   async (args) => {
     const data: Record<string, string | undefined> = {
@@ -73,9 +76,10 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   'schedule_task',
-  `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
+  {
+    description: `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
 
 CONTEXT MODE - Choose based on task type:
 \u2022 "group": Task runs in the group's conversation context, with access to chat history. Use for tasks that need context about ongoing discussions, user preferences, or recent interactions.
@@ -96,40 +100,41 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
 \u2022 cron: Standard cron expression (e.g., "*/5 * * * *" for every 5 minutes, "0 9 * * *" for daily at 9am LOCAL time)
 \u2022 interval: Milliseconds between runs (e.g., "300000" for 5 minutes, "3600000" for 1 hour)
 \u2022 once: Local time WITHOUT "Z" suffix (e.g., "2026-02-01T15:30:00"). Do NOT use UTC/Z suffix.`,
-  {
-    prompt: z
-      .string()
-      .describe(
-        'What the agent should do when the task runs. For isolated mode, include all necessary context here.',
-      ),
-    schedule_type: z
-      .enum(['cron', 'interval', 'once'])
-      .describe(
-        'cron=recurring at specific times, interval=recurring every N ms, once=run once at specific time',
-      ),
-    schedule_value: z
-      .string()
-      .describe(
-        'cron: "*/5 * * * *" | interval: milliseconds like "300000" | once: local timestamp like "2026-02-01T15:30:00" (no Z suffix!)',
-      ),
-    context_mode: z
-      .enum(['group', 'isolated'])
-      .default('group')
-      .describe(
-        'group=runs with chat history and memory, isolated=fresh session (include context in prompt)',
-      ),
-    target_group_jid: z
-      .string()
-      .optional()
-      .describe(
-        '(Main group only) JID of the group to schedule the task for. Defaults to the current group.',
-      ),
-    script: z
-      .string()
-      .optional()
-      .describe(
-        'Optional bash script to run before waking the agent. Script must output JSON on the last line of stdout: { "wakeAgent": boolean, "data"?: any }. If wakeAgent is false, the agent is not called. Test your script with bash -c "..." before scheduling.',
-      ),
+    inputSchema: {
+      prompt: z
+        .string()
+        .describe(
+          'What the agent should do when the task runs. For isolated mode, include all necessary context here.',
+        ),
+      schedule_type: z
+        .enum(['cron', 'interval', 'once'])
+        .describe(
+          'cron=recurring at specific times, interval=recurring every N ms, once=run once at specific time',
+        ),
+      schedule_value: z
+        .string()
+        .describe(
+          'cron: "*/5 * * * *" | interval: milliseconds like "300000" | once: local timestamp like "2026-02-01T15:30:00" (no Z suffix!)',
+        ),
+      context_mode: z
+        .enum(['group', 'isolated'])
+        .default('group')
+        .describe(
+          'group=runs with chat history and memory, isolated=fresh session (include context in prompt)',
+        ),
+      target_group_jid: z
+        .string()
+        .optional()
+        .describe(
+          '(Main group only) JID of the group to schedule the task for. Defaults to the current group.',
+        ),
+      script: z
+        .string()
+        .optional()
+        .describe(
+          'Optional bash script to run before waking the agent. Script must output JSON on the last line of stdout: { "wakeAgent": boolean, "data"?: any }. If wakeAgent is false, the agent is not called. Test your script with bash -c "..." before scheduling.',
+        ),
+    },
   },
   async (args) => {
     // Validate schedule_value before writing IPC
@@ -221,10 +226,12 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
   },
 );
 
-server.tool(
+server.registerTool(
   'list_tasks',
-  "List all scheduled tasks. From main: shows all tasks. From other groups: shows only that group's tasks.",
-  {},
+  {
+    description:
+      "List all scheduled tasks. From main: shows all tasks. From other groups: shows only that group's tasks.",
+  },
   async () => {
     const tasksFile = path.join(IPC_DIR, 'current_tasks.json');
 
@@ -285,10 +292,12 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   'pause_task',
-  'Pause a scheduled task. It will not run until resumed.',
-  { task_id: z.string().describe('The task ID to pause') },
+  {
+    description: 'Pause a scheduled task. It will not run until resumed.',
+    inputSchema: { task_id: z.string().describe('The task ID to pause') },
+  },
   async (args) => {
     const data = {
       type: 'pause_task',
@@ -311,10 +320,12 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   'resume_task',
-  'Resume a paused task.',
-  { task_id: z.string().describe('The task ID to resume') },
+  {
+    description: 'Resume a paused task.',
+    inputSchema: { task_id: z.string().describe('The task ID to resume') },
+  },
   async (args) => {
     const data = {
       type: 'resume_task',
@@ -337,10 +348,12 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   'cancel_task',
-  'Cancel and delete a scheduled task.',
-  { task_id: z.string().describe('The task ID to cancel') },
+  {
+    description: 'Cancel and delete a scheduled task.',
+    inputSchema: { task_id: z.string().describe('The task ID to cancel') },
+  },
   async (args) => {
     const data = {
       type: 'cancel_task',
@@ -363,26 +376,29 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   'update_task',
-  'Update an existing scheduled task. Only provided fields are changed; omitted fields stay the same.',
   {
-    task_id: z.string().describe('The task ID to update'),
-    prompt: z.string().optional().describe('New prompt for the task'),
-    schedule_type: z
-      .enum(['cron', 'interval', 'once'])
-      .optional()
-      .describe('New schedule type'),
-    schedule_value: z
-      .string()
-      .optional()
-      .describe('New schedule value (see schedule_task for format)'),
-    script: z
-      .string()
-      .optional()
-      .describe(
-        'New script for the task. Set to empty string to remove the script.',
-      ),
+    description:
+      'Update an existing scheduled task. Only provided fields are changed; omitted fields stay the same.',
+    inputSchema: {
+      task_id: z.string().describe('The task ID to update'),
+      prompt: z.string().optional().describe('New prompt for the task'),
+      schedule_type: z
+        .enum(['cron', 'interval', 'once'])
+        .optional()
+        .describe('New schedule type'),
+      schedule_value: z
+        .string()
+        .optional()
+        .describe('New schedule value (see schedule_task for format)'),
+      script: z
+        .string()
+        .optional()
+        .describe(
+          'New script for the task. Set to empty string to remove the script.',
+        ),
+    },
   },
   async (args) => {
     // Validate schedule_value if provided
@@ -448,24 +464,26 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   'register_group',
-  `Register a new chat/group so the agent can respond to messages there. Main group only.
+  {
+    description: `Register a new chat/group so the agent can respond to messages there. Main group only.
 
 Use available_groups.json to find the JID for a group. The folder name must be channel-prefixed: "{channel}_{group-name}" (e.g., "whatsapp_family-chat", "telegram_dev-team", "discord_general"). Use lowercase with hyphens for the group name part.`,
-  {
-    jid: z
-      .string()
-      .describe(
-        'The chat JID (e.g., "120363336345536173@g.us", "tg:-1001234567890", "dc:1234567890123456")',
-      ),
-    name: z.string().describe('Display name for the group'),
-    folder: z
-      .string()
-      .describe(
-        'Channel-prefixed folder name (e.g., "whatsapp_family-chat", "telegram_dev-team")',
-      ),
-    trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
+    inputSchema: {
+      jid: z
+        .string()
+        .describe(
+          'The chat JID (e.g., "120363336345536173@g.us", "tg:-1001234567890", "dc:1234567890123456")',
+        ),
+      name: z.string().describe('Display name for the group'),
+      folder: z
+        .string()
+        .describe(
+          'Channel-prefixed folder name (e.g., "whatsapp_family-chat", "telegram_dev-team")',
+        ),
+      trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
+    },
   },
   async (args) => {
     if (!isMain) {
@@ -502,40 +520,43 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
-server.tool(
+server.registerTool(
   'run_debate',
-  'Run a planning-led internal debate with workshop participants using objective evidence packs, and return round summaries plus a synthesis recommendation.',
   {
-    topic: z
-      .string()
-      .trim()
-      .min(1)
-      .describe('Debate topic or decision under review.'),
-    mode: z.enum(DEBATE_MODE_IDS).describe('Debate mode to run.'),
-    rounds: z
-      .number()
-      .int()
-      .min(1)
-      .max(12)
-      .optional()
-      .describe('Optional round override.'),
-    background_knowledge_refs: z
-      .array(z.string().trim().min(1))
-      .optional()
-      .describe('Optional background references or context pointers.'),
-    evidence_packs: z
-      .array(
-        z.object({
-          type: z.enum(['web', 'file', 'memory', 'karpathy_loop_brief']),
-          ref: z.string().trim().min(1),
-          title: z.string().trim().min(1).optional(),
-          summary: z.string().trim().min(1).optional(),
-        }),
-      )
-      .min(1)
-      .describe(
-        'Required structured evidence for the debate. Collect objective material first and pass it here so participants debate from the same evidence base.',
-      ),
+    description:
+      'Run a planning-led internal debate with workshop participants using objective evidence packs, and return round summaries plus a synthesis recommendation.',
+    inputSchema: {
+      topic: z
+        .string()
+        .trim()
+        .min(1)
+        .describe('Debate topic or decision under review.'),
+      mode: z.enum(DEBATE_MODE_IDS).describe('Debate mode to run.'),
+      rounds: z
+        .number()
+        .int()
+        .min(1)
+        .max(12)
+        .optional()
+        .describe('Optional round override.'),
+      background_knowledge_refs: z
+        .array(z.string().trim().min(1))
+        .optional()
+        .describe('Optional background references or context pointers.'),
+      evidence_packs: z
+        .array(
+          z.object({
+            type: z.enum(['web', 'file', 'memory', 'karpathy_loop_brief']),
+            ref: z.string().trim().min(1),
+            title: z.string().trim().min(1).optional(),
+            summary: z.string().trim().min(1).optional(),
+          }),
+        )
+        .min(1)
+        .describe(
+          'Required structured evidence for the debate. Collect objective material first and pass it here so participants debate from the same evidence base.',
+        ),
+    },
   },
   async (args) => {
     const parsed = validateDebateRequest(args);
@@ -589,18 +610,24 @@ if (subAgentManager && subAgentManager.size > 0) {
     .map((a) => a.name)
     .join(', ');
 
-  server.tool(
+  server.registerTool(
     'ask_agent',
-    `Ask a sub-agent (team member) for help. Available agents: ${agentNames}. Each agent is a separate AI model that can provide a different perspective, review code, or answer questions. Each sub-agent uses only its own configured tool allowlist.`,
     {
-      agent: z
-        .string()
-        .describe(`Name of the sub-agent to ask (${agentNames})`),
-      prompt: z.string().describe('The question or request for the sub-agent'),
-      system_prompt: z
-        .string()
-        .optional()
-        .describe('Optional system prompt to set context for the sub-agent'),
+      description: `Ask a sub-agent (team member) for help. Available agents: ${agentNames}. Each agent is a separate AI model that can provide a different perspective, review code, or answer questions. Each sub-agent uses only its own configured tool allowlist.`,
+      inputSchema: {
+        agent: z
+          .string()
+          .describe(`Name of the sub-agent to ask (${agentNames})`),
+        prompt: z
+          .string()
+          .describe('The question or request for the sub-agent'),
+        system_prompt: z
+          .string()
+          .optional()
+          .describe(
+            'Optional system prompt to set context for the sub-agent',
+          ),
+      },
     },
     async (args) => {
       try {
@@ -631,10 +658,12 @@ if (subAgentManager && subAgentManager.size > 0) {
     },
   );
 
-  server.tool(
+  server.registerTool(
     'list_agents',
-    'List available sub-agents (team members) and their roles.',
-    {},
+    {
+      description:
+        'List available sub-agents (team members) and their roles.',
+    },
     async () => {
       const agents = subAgentManager.listAgents();
       const lines = agents.map(
@@ -649,6 +678,69 @@ if (subAgentManager && subAgentManager.size > 0) {
               agents.length > 0
                 ? `Sub-agents:\n${lines.join('\n')}`
                 : 'No sub-agents configured.',
+          },
+        ],
+      };
+    },
+  );
+}
+
+// ── start_workflow ───────────────────────────────────────────────
+const canStartWorkflow = process.env.NANOCLAW_CAN_START_WORKFLOW === '1';
+
+if (canStartWorkflow) {
+  server.registerTool(
+    'start_workflow',
+    {
+      description:
+        'Start a workflow on the host. Use this to trigger multi-step processes like wiki synthesis via the quality-loop engine. The host workflow engine will validate, route, and execute the steps.',
+      inputSchema: {
+        title: z
+          .string()
+          .describe('Workflow title (e.g. "Wiki Synthesis: 안전성검토")'),
+        steps: z
+          .array(
+            z.object({
+              assignee: z
+                .string()
+                .describe('Agent or bot ID to assign the step to'),
+              goal: z
+                .string()
+                .describe('What this step should accomplish'),
+              acceptance_criteria: z
+                .array(z.string())
+                .describe(
+                  'Array of criteria strings. For quality-loop, include a JSON config string.',
+                ),
+              constraints: z
+                .array(z.string())
+                .optional()
+                .describe('Optional constraints for the step'),
+              stage_id: z
+                .string()
+                .describe('Flow stage ID (e.g. "execute")'),
+            }),
+          )
+          .describe('Workflow steps to execute'),
+      },
+    },
+    async (args) => {
+      const data = {
+        type: 'start_workflow',
+        chatJid,
+        groupFolder,
+        title: args.title,
+        steps: args.steps,
+        timestamp: new Date().toISOString(),
+      };
+
+      const filename = writeIpcFile(TASKS_DIR, data);
+
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Workflow "${args.title}" submitted (${filename}). The host will validate and start execution.`,
           },
         ],
       };

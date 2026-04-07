@@ -23,36 +23,23 @@ You are operating in the Discord Secretary department.
 
 ## Wiki Quality-Loop Workflow
 
-When a user asks to write or synthesize a wiki (e.g., "안전성검토 wiki 작성해줘", "XXX wiki 만들어줘"), trigger a `karpathy-loop` workflow step.
+Use the **wiki-synthesis** skill to handle wiki requests.
 
-Create a workflow with a single step that has this structure:
-- `stage_id`: `"execute"` (from the karpathy-loop flow)
-- `goal`: describe the wiki synthesis task
-- `acceptance_criteria`: a JSON object with the quality-loop config (see below)
+### Trigger Patterns
 
-### acceptance_criteria JSON format
+| 사용자 요청 | 액션 |
+|------------|------|
+| "XXX wiki 만들어줘", "XXX wiki 작성" | `/start_wiki_synthesis` (신규 생성) |
+| "XXX wiki 업데이트", "XXX 새 문서 반영" | `/update_wiki_synthesis` (증분 업데이트) |
 
-```json
-{
-  "task": "wiki_task.WikiTask",
-  "rubric": "src/catalog/tasks/wiki/rubrics/rubric_<domain>.md",
-  "domain": "<domain>",
-  "vault_root": "/Users/planee/Documents/Mywork",
-  "base_path": "3. Resource/LLM Knowledge Base/index/<domain>.base",
-  "filter": "(<domain>)_*.md"
-}
-```
+### How to Execute
 
-Example for 안전성검토:
-```json
-{
-  "task": "wiki_task.WikiTask",
-  "rubric": "src/catalog/tasks/wiki/rubrics/rubric_안전성검토.md",
-  "domain": "안전성검토",
-  "vault_root": "/Users/planee/Documents/Mywork",
-  "base_path": "3. Resource/LLM Knowledge Base/index/안전성검토.base",
-  "filter": "(안전성검토)_*.md"
-}
-```
+Follow the wiki-synthesis skill (see `container/skills/wiki-synthesis/SKILL.md`).
+The skill handles domain→config mapping automatically. You only need to provide:
+- `domain`: 사용자가 언급한 도메인명 (안전성검토, 첨가물정보제출 등)
+- `wiki_output_dir`: wiki 저장 경로 (기본: Obsidian vault wiki 폴더)
 
-Replace `<domain>` with the topic the user specified. Use the user's exact domain name consistently across all fields.
+### Supported Domains
+
+- **안전성검토**: 안전성검토 raw 문서 → 구조화된 wiki
+- **첨가물정보제출**: 규제준수 raw 문서 → 국가별 신규/변경/정기 wiki
