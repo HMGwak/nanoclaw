@@ -338,6 +338,8 @@ class WikiTask:
             metadata={
                 "domain": domain,
                 "base_path": str(base_path),
+                "vault_root": str(vault_root),
+                "wiki_output_dir": context.config.get("wiki_output_dir"),
                 "filter_pattern": filter_pattern,
                 "all_docs": succeeded_docs,  # only successfully processed docs
                 "docs_processed": [str(p) for p in docs_to_process],
@@ -459,7 +461,21 @@ class WikiTask:
         return json_to_md(updated)
 
     def _load_existing_wiki(self, reference_files: list[Path], domain: str) -> str | None:
-        """Find and return the existing wiki note for domain, or None."""
+        """Find and return the existing wiki note for domain.
+
+        Priority: DB output_path (latest completed run) → reference_files fallback.
+        """
+        # 1. Try DB — latest completed run's output
+        try:
+            tracker = WikiTracker()
+            db_path = tracker.get_latest_wiki_path(domain)
+            if db_path and db_path.exists():
+                logger.info("Loading existing wiki from DB: %s", db_path)
+                return db_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+        # 2. Fallback to reference_files
         for ref in reference_files:
             if ref.stem == domain and ref.suffix == ".md":
                 return ref.read_text(encoding="utf-8")

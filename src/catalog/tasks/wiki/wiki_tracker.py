@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS wiki_runs (
     new_count INTEGER,
     changed_count INTEGER,
     output_count INTEGER,
+    output_path TEXT,
     status TEXT DEFAULT 'running',
     started_at TEXT NOT NULL,
     completed_at TEXT
@@ -132,17 +133,33 @@ class WikiTracker:
 
         self._conn.commit()
 
-    def complete_run(self, run_id: str, output_count: int) -> None:
-        """Mark a run as completed and record final output_count."""
+    def complete_run(self, run_id: str, output_count: int, output_path: str | None = None) -> None:
+        """Mark a run as completed and record final output_count + output_path."""
         self._conn.execute(
             """
             UPDATE wiki_runs
-            SET status = 'completed', completed_at = ?, output_count = ?
+            SET status = 'completed', completed_at = ?, output_count = ?, output_path = ?
             WHERE run_id = ?
             """,
-            (_now(), output_count, run_id),
+            (_now(), output_count, output_path, run_id),
         )
         self._conn.commit()
+
+    def get_latest_wiki_path(self, domain: str) -> Path | None:
+        """Return the output_path of the latest completed run for a domain."""
+        row = self._conn.execute(
+            """
+            SELECT output_path FROM wiki_runs
+            WHERE domain = ? AND status = 'completed' AND output_path IS NOT NULL
+            ORDER BY completed_at DESC
+            LIMIT 1
+            """,
+            (domain,),
+        ).fetchone()
+        if row and row[0]:
+            p = Path(row[0])
+            return p if p.exists() else None
+        return None
 
     def get_latest_hash(self, doc_path: str) -> str | None:
         """Return the most recent content hash for doc_path, or None."""

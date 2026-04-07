@@ -663,7 +663,7 @@ def run_loop(
 
         # Record to DB only after successful verdict
         if first_run_metadata.get("all_docs"):
-            _record_tracker(first_run_metadata, run_id)
+            _record_tracker(first_run_metadata, run_id, list(final_dir.iterdir()) if final_dir.exists() else [])
 
     elif status == "discard":
         discarded_dir.mkdir(parents=True, exist_ok=True)
@@ -922,7 +922,7 @@ def _load_task(task_spec: str) -> TaskProtocol:
     return cls()
 
 
-def _record_tracker(metadata: dict, run_id: str) -> None:
+def _record_tracker(metadata: dict, run_id: str, final_files: list[Path]) -> None:
     """Record processed docs to WikiTracker after successful verdict."""
     try:
         import sys as _sys
@@ -937,9 +937,23 @@ def _record_tracker(metadata: dict, run_id: str) -> None:
         base_path = metadata.get("base_path", "")
         filter_pattern = metadata.get("filter_pattern")
 
+        # Determine output_path (first final file)
+        output_path = str(final_files[0]) if final_files else None
+
         tracker.record_run(run_id, domain, base_path, filter_pattern, all_docs, {})
-        tracker.complete_run(run_id, output_count=1)
-        logger.info("DB recorded: %d docs for domain=%s", len(all_docs), domain)
+        tracker.complete_run(run_id, output_count=len(final_files), output_path=output_path)
+
+        # Auto-copy to wiki output dir if specified
+        wiki_output_dir = metadata.get("wiki_output_dir")
+        if wiki_output_dir and final_files:
+            dest_dir = Path(wiki_output_dir)
+            if dest_dir.exists():
+                for f in final_files:
+                    dest = dest_dir / f.name
+                    shutil.copy2(f, dest)
+                    logger.info("Auto-copied wiki to %s", dest)
+
+        logger.info("DB recorded: %d docs for domain=%s, output=%s", len(all_docs), domain, output_path)
     except Exception as exc:
         logger.warning("Failed to record to WikiTracker: %s", exc)
 
