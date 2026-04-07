@@ -396,6 +396,80 @@ export const allTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'send_message',
+      description:
+        "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages.",
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'The message text to send.' },
+          sender: {
+            type: 'string',
+            description:
+              'Your role/identity name (e.g. "Researcher"). Optional.',
+          },
+        },
+        required: ['text'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'start_workflow',
+      description:
+        'Start a workflow on the host. Use this to trigger multi-step processes like wiki synthesis via the quality-loop engine.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: {
+            type: 'string',
+            description: 'Workflow title (e.g. "Wiki Synthesis: 안전성검토")',
+          },
+          steps: {
+            type: 'array',
+            description: 'Workflow steps to execute',
+            items: {
+              type: 'object',
+              properties: {
+                assignee: {
+                  type: 'string',
+                  description: 'Agent or bot ID to assign the step to',
+                },
+                goal: {
+                  type: 'string',
+                  description: 'What this step should accomplish',
+                },
+                acceptance_criteria: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description:
+                    'Array of criteria strings. For quality-loop, include a JSON config string.',
+                },
+                constraints: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Optional constraints for the step',
+                },
+                stage_id: {
+                  type: 'string',
+                  description: 'Flow stage ID (e.g. "execute")',
+                },
+              },
+              required: ['assignee', 'goal', 'acceptance_criteria', 'stage_id'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['title', 'steps'],
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 export function filterTools(

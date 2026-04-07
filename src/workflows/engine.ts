@@ -646,7 +646,12 @@ export class WorkflowEngine {
 
     try {
       const result = await this.deps.executeQualityLoop!(params, (msg) => {
-        this.deps.sendMessage(workflow.source_chat_jid, msg).catch(() => {});
+        if (this.deps.writeGroupIpcMessage) {
+          this.deps.writeGroupIpcMessage(workflow.source_group_folder, workflow.source_chat_jid, msg);
+        } else {
+          this.deps.sendMessage(workflow.source_chat_jid, msg).catch(() => {});
+        }
+        this.repository.updateWorkflowStep(step.id, { result_summary: msg });
       });
 
       const isSuccess = ['keep', 'converged', 'max_iterations'].includes(
@@ -724,8 +729,9 @@ function parseQualityLoopConfig(
     model: config.model as string | undefined,
     domain: config.domain as string | undefined,
     vaultRoot: config.vault_root as string | undefined,
-    basePath: config.base as string | undefined,
+    basePath: (config.base as string) || (config.base_path as string) || undefined,
     filter: config.filter as string | undefined,
+    wikiOutputDir: (config.wiki_output_dir as string) || undefined,
   };
 }
 

@@ -218,6 +218,9 @@ async function main(): Promise<void> {
   }
 
   const agentEnv: Record<string, string | undefined> = { ...process.env };
+  if (containerInput.canStartWorkflow) {
+    agentEnv.NANOCLAW_CAN_START_WORKFLOW = '1';
+  }
   const provider = getAgentProvider(process.env.NANOCLAW_AGENT_BACKEND);
 
   log(`Using agent backend: ${provider.name}`);

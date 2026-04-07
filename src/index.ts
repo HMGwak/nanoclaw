@@ -49,7 +49,7 @@ import {
 } from './db.js';
 import { createWorkflowRepository } from './storage/workflows.js';
 import { GroupQueue } from './group-queue.js';
-import { resolveGroupFolderPath } from './group-folder.js';
+import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
@@ -214,6 +214,30 @@ function loadState(): void {
   }
   sessions = getAllSessions();
   registeredGroups = getAllRegisteredGroups();
+
+  // Merge config.json overrides so file-based changes take effect on restart
+  for (const [jid, group] of Object.entries(registeredGroups)) {
+    try {
+      const groupDir = resolveGroupFolderPath(group.folder);
+      const configFile = path.join(groupDir, 'config.json');
+      if (fs.existsSync(configFile)) {
+        const fileConfig = JSON.parse(fs.readFileSync(configFile, 'utf-8'));
+        const merged = { ...group.containerConfig, ...fileConfig };
+        if (JSON.stringify(merged) !== JSON.stringify(group.containerConfig)) {
+          group.containerConfig = merged;
+          registeredGroups[jid] = group;
+          setRegisteredGroup(jid, group);
+          logger.info(
+            { folder: group.folder },
+            'Merged config.json override into registered group',
+          );
+        }
+      }
+    } catch {
+      // Group folder may not exist yet
+    }
+  }
+
   logger.info(
     { groupCount: Object.keys(registeredGroups).length },
     'State loaded',
@@ -447,6 +471,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
+
+  // If agent completed successfully but sent no output, send a fallback notice
+  if (output !== 'error' && !hadError && !outputSentToUser) {
+    try {
+      const sender = resolveGroupTargetSender(group, chatJid);
+      await channel.sendMessage(chatJid, '작업을 처리했습니다.', { sender });
+      logger.warn({ group: group.name }, 'Agent returned no output, sent fallback notice');
+    } catch { /* best-effort */ }
+  }
 
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —
@@ -953,6 +986,18 @@ async function main(): Promise<void> {
       const channel = findChannel(channels, jid);
       if (channel) await channel.sendMessage(jid, text);
     },
+    writeGroupIpcMessage: (groupFolder, chatJid, text) => {
+      try {
+        const messagesDir = path.join(resolveGroupIpcPath(groupFolder), 'messages');
+        fs.mkdirSync(messagesDir, { recursive: true });
+        const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+        const tmp = path.join(messagesDir, `${filename}.tmp`);
+        fs.writeFileSync(tmp, JSON.stringify({ chatJid, text, sender: groupFolder }));
+        fs.renameSync(tmp, path.join(messagesDir, filename));
+      } catch (err) {
+        logger.warn({ groupFolder, err }, 'Failed to write IPC progress message');
+      }
+    },
     registeredGroups: () => registeredGroups,
     repository: createWorkflowRepository(getDatabase()),
     enqueueWorkflowStep: (
@@ -1022,6 +1067,9 @@ async function main(): Promise<void> {
       }
       if (params.filter) {
         args.push('--filter', params.filter);
+      }
+      if (params.wikiOutputDir) {
+        args.push('--wiki-output-dir', params.wikiOutputDir);
       }
 
       fs.mkdirSync(params.outputDir, { recursive: true });

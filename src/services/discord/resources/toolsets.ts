@@ -35,6 +35,7 @@ const LOCAL_TOOLSETS: Record<string, DiscordLocalToolsetSpec> = {
       'global_browser_research',
       'obsidian_vault_tools',
     ],
+    allowedTools: ['send_message', 'start_workflow', 'web_search', 'cloudflare_fetch', 'web_fetch', 'safe_shell'],
   },
 };
 

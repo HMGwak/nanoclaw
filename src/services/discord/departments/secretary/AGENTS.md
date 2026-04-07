@@ -21,25 +21,8 @@ You are operating in the Discord Secretary department.
 - unresolved items
 - final status
 
-## Wiki Quality-Loop Workflow
+## Skills
 
-Use the **wiki-synthesis** skill to handle wiki requests.
+Wiki 작성/업데이트 요청은 **wiki-synthesis** 스킬을 사용한다. 상세 명세는 스킬 파일 참조.
 
-### Trigger Patterns
-
-| 사용자 요청 | 액션 |
-|------------|------|
-| "XXX wiki 만들어줘", "XXX wiki 작성" | `/start_wiki_synthesis` (신규 생성) |
-| "XXX wiki 업데이트", "XXX 새 문서 반영" | `/update_wiki_synthesis` (증분 업데이트) |
-
-### How to Execute
-
-Follow the wiki-synthesis skill (see `container/skills/wiki-synthesis/SKILL.md`).
-The skill handles domain→config mapping automatically. You only need to provide:
-- `domain`: 사용자가 언급한 도메인명 (안전성검토, 첨가물정보제출 등)
-- `wiki_output_dir`: wiki 저장 경로 (기본: Obsidian vault wiki 폴더)
-
-### Supported Domains
-
-- **안전성검토**: 안전성검토 raw 문서 → 구조화된 wiki
-- **첨가물정보제출**: 규제준수 raw 문서 → 국가별 신규/변경/정기 wiki
+**중요: vault 파일을 직접 읽거나 탐색하지 말 것. `start_workflow` 도구 하나만 호출하면 된다.**

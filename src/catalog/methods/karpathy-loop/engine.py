@@ -818,9 +818,10 @@ task의 실행 결과를 rubric으로 평가하여 keep/revise/discard를 반복
     )
     parser.add_argument(
         "--input",
-        required=True,
+        required=False,
         nargs="+",
-        help="Input file glob patterns",
+        default=[],
+        help="Input file glob patterns (optional when --domain + --base used)",
     )
     parser.add_argument(
         "--reference",
@@ -861,6 +862,11 @@ task의 실행 결과를 rubric으로 평가하여 keep/revise/discard를 반복
         default=None,
         help=".base 인덱스 파일 경로. Obsidian Base 파일로 raw 문서를 자동 발견. 예: index/안전성검토.base",
     )
+    parser.add_argument(
+        "--wiki-output-dir",
+        default=None,
+        help="완성된 wiki를 자동 복사할 Obsidian 폴더 경로",
+    )
 
     args = parser.parse_args()
 
@@ -871,7 +877,8 @@ task의 실행 결과를 rubric으로 평가하여 keep/revise/discard를 반복
     input_files = _resolve_globs(args.input)
     reference_files = _resolve_globs(args.reference)
 
-    if not input_files:
+    # In domain mode with --base, input_files can be empty (WikiTask discovers them)
+    if not input_files and args.domain is None:
         logger.error("No input files found matching: %s", args.input)
         raise SystemExit(1)
 
@@ -889,6 +896,8 @@ task의 실행 결과를 rubric으로 평가하여 keep/revise/discard를 반복
         context_config["filter"] = args.filter
     if args.base is not None:
         context_config["base"] = args.base
+    if args.wiki_output_dir is not None:
+        context_config["wiki_output_dir"] = args.wiki_output_dir
 
     report = run_loop(
         task=task,

@@ -9,6 +9,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import fs from 'fs';
 import path from 'path';
+import { execFile } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import { loadSubAgentManager } from './sub-agent-manager.js';
 import {
@@ -747,6 +748,40 @@ if (canStartWorkflow) {
     },
   );
 }
+
+// Safe read-only shell tool
+const SAFE_SHELL_ALLOWED = /^(python3?|ls|find|cat|head|tail|grep|echo|which|wc|stat|file)\b/;
+const SAFE_SHELL_BLOCKED = /\brm\b|\brmdir\b|\bmv\b|\bcp\b|\bchmod\b|\bchown\b|\bdd\b|\bmkfs\b|\btruncate\b|>|>>|\btee\b/;
+
+server.registerTool(
+  'safe_shell',
+  {
+    description:
+      'Run a read-only shell command for exploration (ls, cat, find, python --help, grep, etc.). Destructive commands (rm, mv, chmod, redirects) are blocked.',
+    inputSchema: {
+      command: z.string().describe('Shell command to run (read-only operations only)'),
+    },
+  },
+  async (args) => {
+    const cmd = args.command.trim();
+    if (!SAFE_SHELL_ALLOWED.test(cmd)) {
+      return {
+        content: [{ type: 'text' as const, text: `Error: command not in allowlist. Permitted: python, ls, find, cat, head, tail, grep, echo, which, wc, stat, file` }],
+      };
+    }
+    if (SAFE_SHELL_BLOCKED.test(cmd)) {
+      return {
+        content: [{ type: 'text' as const, text: `Error: destructive operation not allowed` }],
+      };
+    }
+    return new Promise((resolve) => {
+      execFile('bash', ['-c', cmd], { timeout: 10_000, maxBuffer: 256 * 1024 }, (_err, stdout, stderr) => {
+        const output = (stdout + (stderr ? `\nstderr: ${stderr}` : '')).trim();
+        resolve({ content: [{ type: 'text' as const, text: output || '(no output)' }] });
+      });
+    });
+  },
+);
 
 // Start the stdio transport
 const transport = new StdioServerTransport();

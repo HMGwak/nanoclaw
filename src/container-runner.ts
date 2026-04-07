@@ -486,14 +486,42 @@ async function buildContainerArgs(
     if (openaiKey) args.push('-e', `OPENAI_API_KEY=${openaiKey}`);
     args.push('-e', `CODEX_MODEL=${openaiModel}`);
   } else if (backend === 'openai-compat' || backend === 'zai') {
-    const apiKey = groupCfg?.apiKey || globalConfig.openaiCompatApiKey;
+    // When group overrides the global backend, globalConfig may not have
+    // openai-compat credentials. Fall back to env-file directly.
+    const compatEnv = globalConfig.openaiCompatApiKey
+      ? null
+      : readEnvFile([
+          'OPENAI_COMPAT_API_KEY',
+          'ZAI_API_KEY',
+          'OPENAI_COMPAT_BASE_URL',
+          'OPENAI_COMPAT_MODEL',
+          'ZAI_MODEL',
+        ]);
+    const apiKey =
+      groupCfg?.apiKey ||
+      globalConfig.openaiCompatApiKey ||
+      process.env.OPENAI_COMPAT_API_KEY ||
+      compatEnv?.OPENAI_COMPAT_API_KEY ||
+      process.env.ZAI_API_KEY ||
+      compatEnv?.ZAI_API_KEY;
     const baseUrl =
-      groupCfg?.baseUrl || lead?.baseUrl || globalConfig.openaiCompatBaseUrl;
+      groupCfg?.baseUrl ||
+      lead?.baseUrl ||
+      globalConfig.openaiCompatBaseUrl ||
+      compatEnv?.OPENAI_COMPAT_BASE_URL ||
+      'https://api.z.ai/api/paas/v4/';
     const model =
-      groupCfg?.model || lead?.model || globalConfig.openaiCompatModel;
+      groupCfg?.model ||
+      lead?.model ||
+      globalConfig.openaiCompatModel ||
+      compatEnv?.OPENAI_COMPAT_MODEL ||
+      process.env.ZAI_MODEL ||
+      compatEnv?.ZAI_MODEL;
     if (apiKey) args.push('-e', `OPENAI_COMPAT_API_KEY=${apiKey}`);
     if (baseUrl) args.push('-e', `OPENAI_COMPAT_BASE_URL=${baseUrl}`);
     if (model) args.push('-e', `OPENAI_COMPAT_MODEL=${model}`);
+    const fallbackModel = groupCfg?.fallbackModel;
+    if (fallbackModel) args.push('-e', `OPENAI_COMPAT_FALLBACK_MODEL=${fallbackModel}`);
   } else if (backend === 'openai') {
     const apiKey = groupCfg?.apiKey || globalConfig.openaiApiKey;
     const baseUrl =

@@ -60,6 +60,8 @@ export interface ContainerConfig {
   apiKey?: string;
   /** Per-group base URL override (for openai-compat). */
   baseUrl?: string;
+  /** Fallback model when primary model fails (e.g. rate limit, API error). */
+  fallbackModel?: string;
   /**
    * Legacy compatibility override for service-specific speaker names.
    * New source-of-truth lives in service deployment specs under `src/services/*`.

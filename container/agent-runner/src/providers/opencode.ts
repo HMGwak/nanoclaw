@@ -178,8 +178,6 @@ function writeConfig(
   model: string,
   ctx: AgentTurnContext,
 ): void {
-  const mcpServerPath = ctx.mcpServerPath;
-
   const config: Record<string, unknown> = {
     $schema: 'https://opencode.ai/config.json',
     model,
@@ -197,19 +195,8 @@ function writeConfig(
       patch: true,
       todowrite: true,
     },
-    // MCP servers
-    mcp: {
-      nanoclaw: {
-        type: 'local',
-        command: ['node', mcpServerPath],
-        environment: {
-          NANOCLAW_CHAT_JID: ctx.containerInput.chatJid,
-          NANOCLAW_GROUP_FOLDER: ctx.containerInput.groupFolder,
-          NANOCLAW_IS_MAIN: ctx.containerInput.isMain ? '1' : '0',
-          NANOCLAW_CAN_START_WORKFLOW: ctx.containerInput.canStartWorkflow ? '1' : '0',
-        },
-      },
-    },
+    // No MCP — nanoclaw IPC tools are installed as native custom tools
+    // to avoid MCP server hang issues inside the opencode subprocess.
     instructions: [] as string[],
   };
 
@@ -464,13 +451,88 @@ export const pdf = tool({
 `;
 }
 
+function buildNanoclawToolSource(ctx: AgentTurnContext): string {
+  const canStart = ctx.containerInput.canStartWorkflow ? 'true' : 'false';
+  return `
+import { tool } from "@opencode-ai/plugin";
+import fs from "fs";
+import path from "path";
+
+const IPC_DIR = "/workspace/ipc";
+const MESSAGES_DIR = path.join(IPC_DIR, "messages");
+const TASKS_DIR = path.join(IPC_DIR, "tasks");
+const CHAT_JID = process.env.NANOCLAW_CHAT_JID || "";
+const GROUP_FOLDER = process.env.NANOCLAW_GROUP_FOLDER || "";
+const CAN_START_WORKFLOW = ${canStart};
+
+function writeIpcFile(dir, data) {
+  fs.mkdirSync(dir, { recursive: true });
+  const filename = \`\${Date.now()}-\${Math.random().toString(36).slice(2, 8)}.json\`;
+  const filepath = path.join(dir, filename);
+  const tempPath = \`\${filepath}.tmp\`;
+  fs.writeFileSync(tempPath, JSON.stringify(data, null, 2));
+  fs.renameSync(tempPath, filepath);
+  return filename;
+}
+
+export const send_message = tool({
+  description: "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages.",
+  args: {
+    text: tool.schema.string().describe("The message text to send"),
+    sender: tool.schema.string().optional().describe("Your role/identity name (e.g. 'Researcher')"),
+  },
+  async execute(args) {
+    const data = {
+      type: "message",
+      chatJid: CHAT_JID,
+      text: args.text,
+      sender: args.sender || undefined,
+      groupFolder: GROUP_FOLDER,
+      timestamp: new Date().toISOString(),
+    };
+    writeIpcFile(MESSAGES_DIR, data);
+    return "Message sent.";
+  },
+});
+
+${canStart ? `export const start_workflow = tool({
+  description: "Start a workflow on the host. Use this to trigger multi-step processes like wiki synthesis via the quality-loop engine.",
+  args: {
+    title: tool.schema.string().describe('Workflow title (e.g. "Wiki Synthesis: 안전성검토")'),
+    steps: tool.schema.array(
+      tool.schema.object({
+        assignee: tool.schema.string().describe("Agent or bot ID to assign the step to"),
+        goal: tool.schema.string().describe("What this step should accomplish"),
+        acceptance_criteria: tool.schema.array(tool.schema.string()).describe("Array of criteria strings. For quality-loop, include a JSON config string."),
+        constraints: tool.schema.array(tool.schema.string()).optional().describe("Optional constraints"),
+        stage_id: tool.schema.string().describe('Flow stage ID (e.g. "execute")'),
+      })
+    ).describe("Workflow steps to execute"),
+  },
+  async execute(args) {
+    const data = {
+      type: "start_workflow",
+      chatJid: CHAT_JID,
+      groupFolder: GROUP_FOLDER,
+      title: args.title,
+      steps: args.steps,
+      timestamp: new Date().toISOString(),
+    };
+    const filename = writeIpcFile(TASKS_DIR, data);
+    return \`Workflow "\${args.title}" submitted (\${filename}). The host will validate and start execution.\`;
+  },
+});` : '// start_workflow not enabled for this group'}
+`;
+}
+
 function installCustomTools(ctx: AgentTurnContext): void {
   const toolsDir = path.join(WORK_DIR, '.opencode', 'tools');
   fs.mkdirSync(toolsDir, { recursive: true });
 
   fs.writeFileSync(path.join(toolsDir, 'browser.ts'), buildAgentBrowserToolSource());
   fs.writeFileSync(path.join(toolsDir, 'playwright.ts'), buildPlaywrightToolSource());
-  ctx.log(`Custom tools installed: browser.ts, playwright.ts`);
+  fs.writeFileSync(path.join(toolsDir, 'nanoclaw.ts'), buildNanoclawToolSource(ctx));
+  ctx.log(`Custom tools installed: browser.ts, playwright.ts, nanoclaw.ts`);
 }
 
 /**
@@ -514,23 +576,60 @@ function parseJsonOutput(stdout: string, log: (msg: string) => void): string {
   return resultText.trim();
 }
 
+const OPENCODE_SESSION_FILE = path.join(WORK_DIR, '.opencode-session.json');
+
+interface OpenCodeSessionMap {
+  [nanoclawSessionId: string]: string;
+}
+
+function loadOpenCodeSessionId(nanoclawSessionId: string): string | undefined {
+  try {
+    if (!fs.existsSync(OPENCODE_SESSION_FILE)) return undefined;
+    const map: OpenCodeSessionMap = JSON.parse(
+      fs.readFileSync(OPENCODE_SESSION_FILE, 'utf-8'),
+    );
+    return map[nanoclawSessionId];
+  } catch {
+    return undefined;
+  }
+}
+
+function saveOpenCodeSessionId(nanoclawSessionId: string, opencodeSessionId: string): void {
+  try {
+    let map: OpenCodeSessionMap = {};
+    if (fs.existsSync(OPENCODE_SESSION_FILE)) {
+      map = JSON.parse(fs.readFileSync(OPENCODE_SESSION_FILE, 'utf-8'));
+    }
+    map[nanoclawSessionId] = opencodeSessionId;
+    fs.writeFileSync(OPENCODE_SESSION_FILE, JSON.stringify(map, null, 2));
+  } catch {
+    // ignore
+  }
+}
+
+function extractOpenCodeSessionId(stdout: string): string | undefined {
+  for (const line of stdout.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line);
+      if (event.sessionID) return event.sessionID;
+    } catch {
+      // ignore
+    }
+  }
+  return undefined;
+}
+
 async function runOpencodeTurn(
   context: AgentTurnContext,
 ): Promise<AgentTurnResult> {
-  const sessionId = context.sessionId || crypto.randomUUID();
+  const nanoclawSessionId = context.sessionId || crypto.randomUUID();
   const model = context.agentEnv.OPENCODE_MODEL || DEFAULT_OPENCODE_MODEL;
   const apiKey = context.agentEnv.OPENCODE_API_KEY || '';
 
   context.log(
-    `OpenCode CLI turn (session: ${sessionId}, model: ${model})`,
+    `OpenCode CLI turn (nanoclaw session: ${nanoclawSessionId}, model: ${model})`,
   );
-
-  if (!apiKey) {
-    const errorMsg = 'OPENCODE_API_KEY is not set';
-    context.log(`Error: ${errorMsg}`);
-    context.emitOutput({ status: 'error', result: null, error: errorMsg });
-    return { closedDuringQuery: false };
-  }
 
   try {
     // Setup: write config and install custom tools
@@ -542,12 +641,14 @@ async function runOpencodeTurn(
     for (const [k, v] of Object.entries(context.agentEnv)) {
       if (typeof v === 'string') env[k] = v;
     }
-    env.OPENCODE_API_KEY = apiKey;
+    if (apiKey) env.OPENCODE_API_KEY = apiKey;
 
-    // Session continuation
+    // Session continuation — use opencode-specific session ID (different from nanoclaw's)
+    const opencodeSessionId = loadOpenCodeSessionId(nanoclawSessionId);
     const args = ['run'];
-    if (context.sessionId) {
-      args.push('--session', context.sessionId);
+    if (opencodeSessionId) {
+      args.push('--session', opencodeSessionId);
+      context.log(`Resuming opencode session: ${opencodeSessionId}`);
     }
     args.push('--format', 'json');
     args.push('--model', model);
@@ -585,16 +686,23 @@ async function runOpencodeTurn(
       .replace(/^(?:I (?:should|need to|will|can) [\s\S]*?\n)+/i, '')
       .trim();
 
+    // Save opencode session ID for future resume
+    const newOpencodeSessionId = extractOpenCodeSessionId(stdout);
+    if (newOpencodeSessionId) {
+      saveOpenCodeSessionId(nanoclawSessionId, newOpencodeSessionId);
+      context.log(`Saved opencode session: ${newOpencodeSessionId}`);
+    }
+
     context.log(`OpenCode response received (${resultText.length} chars)`);
 
     context.emitOutput({
       status: 'success',
       result: resultText || null,
-      newSessionId: sessionId,
+      newSessionId: nanoclawSessionId,
     });
 
     return {
-      newSessionId: sessionId,
+      newSessionId: nanoclawSessionId,
       closedDuringQuery: false,
     };
   } catch (err) {

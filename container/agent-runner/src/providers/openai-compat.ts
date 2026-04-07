@@ -24,9 +24,9 @@ import { runChatCompletionLoop } from './chat-loop.js';
 import { filterTools } from '../tools/catalog.js';
 
 const DEFAULT_MODEL = 'glm-5';
-const DEFAULT_BASE_URL = 'https://api.z.ai/api/paas/v4/';
+const DEFAULT_BASE_URL = 'https://api.z.ai/api/coding/paas/v4';
 const MAX_TOOL_LOOPS = 16;
-const DEFAULT_COMPLETION_TIMEOUT_MS = 30000;
+const DEFAULT_COMPLETION_TIMEOUT_MS = 60000;
 
 const SESSION_STATE_DIR = '/home/node/.nanoclaw/openai-compat';
 
@@ -120,28 +120,47 @@ async function runOpenAICompatTurn(
     }
     messages.push({ role: 'user', content: context.prompt });
 
-    const assistantText = await runChatCompletionLoop({
-      client,
-      model,
-      messages,
-      tools,
-      loopContext: {
-        log: context.log,
-        env: context.agentEnv,
-        chatJid: context.containerInput.chatJid,
-        groupFolder: context.containerInput.groupFolder,
-        isMain: context.containerInput.isMain,
-        emitText: (text: string) => {
-          context.emitOutput({
-            status: 'success',
-            result: text,
-            newSessionId: sessionId,
-          });
-        },
+    const fallbackModel = context.agentEnv.OPENAI_COMPAT_FALLBACK_MODEL;
+    const loopContext = {
+      log: context.log,
+      env: context.agentEnv,
+      chatJid: context.containerInput.chatJid,
+      groupFolder: context.containerInput.groupFolder,
+      isMain: context.containerInput.isMain,
+      emitText: (text: string) => {
+        context.emitOutput({
+          status: 'success',
+          result: text,
+          newSessionId: sessionId,
+        });
       },
-      maxLoops: MAX_TOOL_LOOPS,
-      completionTimeoutMs,
-    });
+    };
+
+    let assistantText: string;
+    try {
+      assistantText = await runChatCompletionLoop({
+        client,
+        model,
+        messages,
+        tools,
+        loopContext,
+        maxLoops: MAX_TOOL_LOOPS,
+        completionTimeoutMs,
+      });
+    } catch (primaryErr) {
+      if (!fallbackModel) throw primaryErr;
+      const errMsg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
+      context.log(`Primary model ${model} failed: ${errMsg}, falling back to ${fallbackModel}`);
+      assistantText = await runChatCompletionLoop({
+        client,
+        model: fallbackModel,
+        messages,
+        tools,
+        loopContext,
+        maxLoops: MAX_TOOL_LOOPS,
+        completionTimeoutMs,
+      });
+    }
 
     // Save history (simplified type for compat providers)
     state.history.push({ role: 'user', content: context.prompt });

@@ -12,6 +12,7 @@ export interface QualityLoopParams {
   vaultRoot?: string;
   basePath?: string;
   filter?: string;
+  wikiOutputDir?: string;
 }
 
 export interface QualityLoopResult {
@@ -25,6 +26,8 @@ export interface QualityLoopResult {
 
 export interface WorkflowEngineDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  /** Send progress/status via the source group's IPC pipeline (preserves bot context). */
+  writeGroupIpcMessage?: (groupFolder: string, chatJid: string, text: string) => void;
   registeredGroups: () => Record<string, RegisteredGroup>;
   repository?: WorkflowRepository;
   enqueueWorkflowStep: (

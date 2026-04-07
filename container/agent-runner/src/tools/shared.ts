@@ -3,6 +3,8 @@
  * Both openai.ts and openai-compat.ts import from here.
  */
 
+import fs from 'fs';
+import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { loadSubAgentManager } from '../sub-agent-manager.js';
@@ -31,6 +33,20 @@ import {
 import { ToolContext } from './types.js';
 
 const execFileAsync = promisify(execFile);
+
+const IPC_DIR = '/workspace/ipc';
+const IPC_MESSAGES_DIR = path.join(IPC_DIR, 'messages');
+const IPC_TASKS_DIR = path.join(IPC_DIR, 'tasks');
+
+function writeIpcFile(dir: string, data: object): string {
+  fs.mkdirSync(dir, { recursive: true });
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+  const filepath = path.join(dir, filename);
+  const tempPath = `${filepath}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(data, null, 2));
+  fs.renameSync(tempPath, filepath);
+  return filename;
+}
 
 export const DEFAULT_SHELL_TIMEOUT_MS = 120_000;
 export const DEFAULT_WEB_TIMEOUT_MS = 45_000;
@@ -507,6 +523,44 @@ export async function executeTool(
     case 'playwright_pdf': {
       const a = JSON.parse(argsJson);
       return JSON.stringify(await playwrightPdf(a.url, tc));
+    }
+
+    // IPC tools
+    case 'send_message': {
+      const a = JSON.parse(argsJson);
+      const chatJid = ctx.chatJid || ctx.env.NANOCLAW_CHAT_JID || '';
+      const groupFolder = ctx.groupFolder || ctx.env.NANOCLAW_GROUP_FOLDER || '';
+      const data = {
+        type: 'message',
+        chatJid,
+        text: a.text,
+        sender: a.sender || undefined,
+        groupFolder,
+        timestamp: new Date().toISOString(),
+      };
+      writeIpcFile(IPC_MESSAGES_DIR, data);
+      ctx.log(`IPC send_message: ${a.text.slice(0, 100)}`);
+      return JSON.stringify({ ok: true, message: 'Message sent.' });
+    }
+    case 'start_workflow': {
+      const canStart = ctx.env.NANOCLAW_CAN_START_WORKFLOW === '1';
+      if (!canStart) {
+        return JSON.stringify({ ok: false, error: 'Workflow start not permitted for this group.' });
+      }
+      const a = JSON.parse(argsJson);
+      const chatJid = ctx.chatJid || ctx.env.NANOCLAW_CHAT_JID || '';
+      const groupFolder = ctx.groupFolder || ctx.env.NANOCLAW_GROUP_FOLDER || '';
+      const data = {
+        type: 'start_workflow',
+        chatJid,
+        groupFolder,
+        title: a.title,
+        steps: a.steps,
+        timestamp: new Date().toISOString(),
+      };
+      const filename = writeIpcFile(IPC_TASKS_DIR, data);
+      ctx.log(`IPC start_workflow: ${a.title} → ${filename}`);
+      return JSON.stringify({ ok: true, message: `Workflow "${a.title}" submitted (${filename}).` });
     }
 
     default:

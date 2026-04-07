@@ -3,6 +3,7 @@ import {
   Events,
   GatewayIntentBits,
   Message,
+  Partials,
   PermissionFlagsBits,
   TextChannel,
 } from 'discord.js';
@@ -198,15 +199,29 @@ export class DiscordChannel implements Channel {
         }
       }
 
-      // Step 3: Determine JID
+      // Step 3: Determine JID — fall back to parent channel for threads
       let chatJid: string;
       if (isPrimary) {
         chatJid = `dc:${channelId}`;
       } else {
         chatJid = `dc:${channelId}:${bot.label}`;
       }
-      const registeredGroup = this.opts.registeredGroups()[chatJid];
-      const requiresTrigger = registeredGroup?.requiresTrigger !== false;
+      let registeredGroup = this.opts.registeredGroups()[chatJid];
+      // If the channel is a thread and not registered, check parent channel
+      let isThreadFallback = false;
+      if (!registeredGroup && 'parentId' in message.channel && message.channel.parentId) {
+        const parentJid = isPrimary
+          ? `dc:${message.channel.parentId}`
+          : `dc:${message.channel.parentId}:${bot.label}`;
+        const parentGroup = this.opts.registeredGroups()[parentJid];
+        if (parentGroup) {
+          registeredGroup = parentGroup;
+          isThreadFallback = true;
+          // Keep chatJid as the thread ID so replies go to the thread
+        }
+      }
+      // Threads that fall back to a parent group don't require a trigger (1:1 thread UX)
+      const requiresTrigger = isThreadFallback ? false : registeredGroup?.requiresTrigger !== false;
 
       // Step 4: Secondary bots normally require a direct mention or reply.
       // Dedicated channels can opt out via requiresTrigger=false.
@@ -334,6 +349,7 @@ export class DiscordChannel implements Channel {
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.DirectMessages,
       ],
+      partials: [Partials.Channel, Partials.Message],
     });
 
     const primaryBot: BotClient = {

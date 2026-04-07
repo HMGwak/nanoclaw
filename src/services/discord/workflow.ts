@@ -86,11 +86,7 @@ function validateWorkflowStep(raw: unknown, index: number): string | undefined {
   );
   if (acceptanceError) return acceptanceError;
 
-  const constraintsError = validateRequiredTextList(
-    step.constraints,
-    `steps[${index}].constraints`,
-  );
-  if (constraintsError) return constraintsError;
+  // constraints is optional — allow undefined/null/empty array
 
   if (typeof step.stage_id !== 'string' || step.stage_id.trim().length === 0) {
     return `steps[${index}].stage_id is required and must be a non-empty string`;
@@ -178,10 +174,12 @@ export function handleDiscordWorkflowStart(
     };
   }
 
+  // assignee is always the requesting group — agents execute their own workflow steps
+  const resolvedAssignee =
+    getDiscordCanonicalGroupFolderForFolder(sourceGroup) || sourceGroup;
   const steps = parseFlowSteps(KARPATHY_FLOW_ID, data.steps).map((step) => ({
     ...step,
-    assignee:
-      getDiscordCanonicalGroupFolderForFolder(step.assignee) || step.assignee,
+    assignee: resolvedAssignee,
   }));
   if (steps.length === 0) {
     logger.warn(
