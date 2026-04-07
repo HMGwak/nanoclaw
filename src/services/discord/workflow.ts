@@ -193,6 +193,35 @@ export function handleDiscordWorkflowStart(
         'No valid workflow steps found. Each step must include assignee, goal, acceptance_criteria, constraints, and stage_id.',
     };
   }
+  // Validate that each step has a valid quality loop config in acceptance_criteria
+  for (let i = 0; i < steps.length; i++) {
+    const criteria = steps[i].acceptance_criteria;
+    const hasQualityConfig =
+      Array.isArray(criteria) &&
+      criteria.some((c) => {
+        if (typeof c !== 'string' || !c.trimStart().startsWith('{')) return false;
+        try {
+          const parsed = JSON.parse(c) as Record<string, unknown>;
+          return Boolean(parsed.task && parsed.rubric);
+        } catch {
+          return false;
+        }
+      });
+    if (!hasQualityConfig) {
+      logger.warn(
+        { sourceGroup, stepIndex: i },
+        'Invalid start_workflow request - acceptance_criteria missing quality loop JSON config',
+      );
+      return {
+        ok: false,
+        reason: 'invalid_steps',
+        error:
+          `steps[${i}].acceptance_criteria must contain a JSON config string with "task" and "rubric" fields. ` +
+          `Example: ["{\\\"task\\\":\\\"wiki_task.WikiTask\\\",\\\"rubric\\\":\\\"path/to/rubric.md\\\",\\\"domain\\\":\\\"...\\\"}"]`,
+      };
+    }
+  }
+
   if (steps.length !== data.steps.length) {
     logger.warn(
       {
