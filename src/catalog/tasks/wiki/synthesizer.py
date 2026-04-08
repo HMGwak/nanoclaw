@@ -131,6 +131,11 @@ CODEX_MAP_PROMPT_TEMPLATE = """\
 - section_target: 이 claim이 들어갈 wiki 섹션 (예: "## 절차", "## 열린 이슈")
 - confidence: high/medium/low
 
+패턴 정리 규칙:
+- patterns 배열의 각 문자열은 원자 항목 1개만 작성하세요.
+- 쉼표(,)로 여러 항목을 한 문자열에 합치지 마세요.
+- 가능한 경우 성격별 라벨을 붙이세요 (예: "문서: BOM", "시스템: SAP", "시험: 연기성분").
+
 원문에 없는 내용은 절대 추가하지 마세요."""
 
 
@@ -146,13 +151,17 @@ Rules:
   - In-text: [^1][^2] (numeric, short)
   - At bottom in ## 각주 section: [^1]: [[(filename)]]
   - Omit .md extension from footnote definitions
-- Every factual sentence MUST have at least one footnote citation.
-- Do NOT add any content not present in the raw documents (no hallucination).
+- Every factual paragraph or bullet block MUST have at least one footnote citation. Not every single sentence needs its own citation — group citations at the paragraph/block level.
+- Stay grounded in raw documents. Do not invent facts. Cross-document synthesis (finding patterns across multiple docs) is allowed and encouraged — this is the purpose of a wiki.
+- Do NOT use defensive hedging phrases such as "사례 문서에서 직접 확인된" or "확인된 바에 따르면". Write direct factual sentences. Evidence is conveyed by footnote citations, not by repetitive source-assertion language.
 - Write concretely so a new team member can perform the same task using only this wiki.
 - Write ALL output in Korean.
-- Use bullet points (- ), numbered lists (1. 2. 3.), and indentation actively to improve readability.
-- Prefer structured lists over long prose paragraphs. Break down complex information into scannable bullet points.
+- Organize by meaning, not by exhaustive enumeration.
+- Do NOT use comma-chain sentences with 5+ items. If many items exist, group them into 2-4 labeled categories with one item per bullet.
+- Use bullets for procedures/checklists/decision branches, not for dumping all extracted items.
+- Do NOT use markdown tables (| |). Use grouped bullet lists instead.
 - Use indented sub-items (tab + -) for hierarchical details.
+- For country/region sections, keep depth balanced. Include comparable sub-items (절차/필수 서류/주요 사례). If evidence is sparse, add one bullet stating the limitation with citation.
 """
 
 _DEFAULT_STRUCTURE = [
@@ -207,12 +216,14 @@ Rules:
   - In-text: [^1][^2] (numeric, short)
   - At bottom in ## 각주 section: [^1]: [[(filename)]]
   - Omit .md extension from footnote definitions
-- Every factual sentence MUST have at least one footnote citation referencing the source document.
-- Do NOT add any content not present in the raw documents (no hallucination).
+- Every factual paragraph or bullet block MUST have at least one footnote citation. Group citations at the paragraph/block level.
+- Stay grounded in raw documents. Do not invent facts. Cross-document synthesis is allowed.
+- Do NOT use defensive hedging phrases such as "사례 문서에서 직접 확인된". Write direct factual sentences with footnote citations.
 - Write concretely so a new team member can perform the same task using only this wiki.
 - Write ALL output in Korean.
-- Use bullet points (- ), numbered lists (1. 2. 3.), and indentation actively to improve readability.
-- Prefer structured lists over long prose paragraphs.
+- Organize by meaning, not by exhaustive enumeration. Do NOT use comma-chain sentences with 5+ items.
+- Do NOT use markdown tables (| |). Use grouped bullet lists instead.
+- Use bullets for procedures/checklists, not for dumping all extracted items.
 """
 
 INCREMENTAL_UPDATE_SYSTEM_PROMPT = """\
@@ -235,9 +246,12 @@ Rules:
 - Footnotes: use type="footnote_def", ref=number. Obsidian format: in-text [^1], bottom [^1]: [[(filename)]].
 - Continue footnote numbering from the highest existing number.
 - Preserve existing content; only add/modify with new information from the raw documents.
-- Every new factual sentence MUST cite the source document via footnote.
+- Every new factual paragraph or bullet block MUST cite the source document via footnote.
 - Remove duplicates and update with the latest information.
-- Do NOT add any content not present in the provided raw documents (no hallucination).
+- Stay grounded in raw documents. Do not invent facts. Cross-document synthesis is allowed.
+- Do NOT use defensive hedging phrases such as "사례 문서에서 직접 확인된". Write direct factual sentences.
+- Do NOT use comma-chain sentences with 5+ items. Group items into labeled categories.
+- Do NOT use markdown tables (| |).
 - Write ALL content values in Korean.
 """
 
@@ -260,6 +274,10 @@ Rules:
 - Preserve existing content; only add/modify with new information.
 - Continue footnote numbering from the highest existing number. Obsidian format: in-text [^1], bottom [^1]: [[(filename)]].
 - Remove duplicates and update with the latest information.
+- Stay grounded in raw documents. Do not invent facts. Cross-document synthesis is allowed.
+- Do NOT use defensive hedging phrases such as "사례 문서에서 직접 확인된". Write direct factual sentences.
+- Do NOT use comma-chain sentences with 5+ items. Group items into labeled categories.
+- Do NOT use markdown tables (| |).
 - Write ALL content values in Korean.
 """
 

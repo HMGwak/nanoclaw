@@ -248,8 +248,12 @@ Apply feedback to revise ONLY the specific parts of the wiki note that need impr
 
 Rules:
 1. Do NOT rewrite the entire document — only produce diffs for sections that need changes.
-2. Do NOT add any content not present in the raw documents (no hallucination).
+2. Stay grounded in raw documents. Do not invent facts. Cross-document synthesis is allowed.
 3. Every improvement MUST include a raw source footnote citation.
+4. Do NOT use defensive hedging phrases (e.g., "사례 문서에서 직접 확인된"). Write direct factual sentences.
+5. Replace long comma-separated item chains (5+ items) with grouped bullet/sub-bullet structure.
+6. Reduce country/region section depth imbalance; if evidence is limited, add one explicit limitation bullet with citation.
+7. Do NOT use markdown tables (| |). Use grouped bullet lists instead.
 
 The existing wiki is provided as a JSON node array. Each node has {id, type, content, parent, indent}.
 
@@ -264,13 +268,14 @@ Respond ONLY with a JSON array of diffs:
 Rules:
 - Target nodes by id (NOT by line number or text matching).
 - Only include diffs for parts that need changes.
-- Preserve existing structure as much as possible.
+- Preserve existing structure as much as possible, but reorganize overloaded comma-lists into bullets/sub-bullets when needed.
 - Write ALL content values in Korean.
 """
 
 REVISE_SYSTEM_PROMPT_IMPROVE = REVISE_BASE_INSTRUCTIONS + """\
 Current goal: Improve weak areas.
 Improve items in order from lowest score to highest to raise overall quality.
+Prioritize fixes for: (1) long comma-chain listings, (2) repetitive defensive phrasing, (3) country/region section depth imbalance.
 """
 
 REVISE_SYSTEM_PROMPT_FIX_GATE = REVISE_BASE_INSTRUCTIONS + """\
