@@ -15,6 +15,7 @@ import re
 import subprocess
 import time
 import uuid
+import fnmatch
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -59,6 +60,12 @@ except ImportError:
         ChatGPTClient = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
+
+# Domain aliases used when deriving automatic filename filters.
+# Example: "첨가물정보제출" domain docs are saved with "(규제준수)_..." filenames.
+AUTO_FILTER_DOMAIN_ALIASES: dict[str, str] = {
+    "첨가물정보제출": "규제준수",
+}
 
 
 # ── Local Gemma ──────────────────────────────────────────────────
@@ -300,7 +307,8 @@ class WikiTask:
         domain = context.config["domain"]
         base_path = Path(context.config.get("base_path", ""))
         vault_root = Path(context.config.get("vault_root", ""))
-        filter_pattern = context.config.get("filter")
+        requested_filter_pattern = context.config.get("filter")
+        effective_filter_pattern = requested_filter_pattern
 
         # wiki_output_dir is required
         wiki_output_dir = context.config.get("wiki_output_dir")
@@ -314,7 +322,34 @@ class WikiTask:
             logger.info("Using %d pre-filtered docs", len(all_docs))
         else:
             parser = BaseIndexParser(vault_root)
-            all_docs = parser.discover(base_path, filter_pattern=filter_pattern)
+            all_docs = parser.discover(base_path, view_name=domain, filter_pattern=requested_filter_pattern)
+
+            # Safety guard: when caller omits filter, apply domain filename pattern
+            # only if it actually matches at least one document.
+            if not requested_filter_pattern:
+                normalized_domain = re.sub(r"\s+", "", domain)
+                auto_filter_token = AUTO_FILTER_DOMAIN_ALIASES.get(
+                    normalized_domain, normalized_domain
+                )
+                auto_filter_pattern = f"({auto_filter_token})_*.md"
+                narrowed = [
+                    p for p in all_docs if fnmatch.fnmatch(p.name, auto_filter_pattern)
+                ]
+                if narrowed:
+                    logger.info(
+                        "Applying auto domain filter %s (%d -> %d docs)",
+                        auto_filter_pattern,
+                        len(all_docs),
+                        len(narrowed),
+                    )
+                    all_docs = narrowed
+                    effective_filter_pattern = auto_filter_pattern
+                else:
+                    logger.info(
+                        "Auto domain filter %s matched 0 docs; keeping base/view matches (%d docs)",
+                        auto_filter_pattern,
+                        len(all_docs),
+                    )
 
         # Optional: limit docs for testing
         max_docs = context.config.get("max_docs")
@@ -364,7 +399,7 @@ class WikiTask:
                 "base_path": str(base_path),
                 "vault_root": str(vault_root),
                 "wiki_output_dir": context.config.get("wiki_output_dir"),
-                "filter_pattern": filter_pattern,
+                "filter_pattern": effective_filter_pattern,
                 "all_docs": succeeded_docs,  # only successfully processed docs
                 "docs_processed": [str(p) for p in docs_to_process],
             },
