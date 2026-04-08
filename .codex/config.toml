@@ -1,0 +1,11 @@
+model = "gpt-5.4"
+model_reasoning_effort = "high"
+sandbox_mode = "read-only"
+approval_policy = "never"
+cli_auth_credentials_store = "file"
+forced_login_method = "chatgpt"
+
+[agents]
+max_threads = 6
+max_depth = 1
+job_max_runtime_seconds = 600
