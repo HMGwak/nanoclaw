@@ -373,14 +373,16 @@ class ChunkedSynthesizer:
     # 4. 오케스트레이터가 claim 누적/중복 병합/패턴 정제 → JSON 반환
     # 5. _claims_to_extractions()로 기존 REDUCE 호환 형태로 변환
 
+    # 2026-04-09 배치 분할 추가: 10개 이상 문서는 배치로 나눠 Codex MAP 여러 번 호출.
+    # 1회 호출에 60+ 문서를 넣으면 Codex 에이전트가 일부만 탐색하고 종료됨.
+    # 배치 크기 10개 = Codex 서브에이전트 6개 병렬 × ~2배 여유.
+    CODEX_MAP_BATCH_SIZE = 10
+
     def _map(self, docs: list[Path], cache_dir: Path | None = None) -> list[dict]:
-        """Codex SDK MAP: 전체 문서를 1회 호출로 분석하여 claim 추출.
+        """Codex SDK MAP: 문서를 배치로 나눠 claim 추출 후 누적 병합.
 
-        Codex 에이전트가 서브에이전트를 병렬로 소환하여 각 문서를 탐색하고,
-        구조화된 claim JSON을 반환한다. 결과는 기존 REDUCE와 호환되는
-        extraction 형태로 변환된다.
-
-        캐시: cache_dir/codex_map_claims.json에 Codex 응답을 저장.
+        10개 이하: 1회 호출. 10개 초과: 배치별 호출 → claims 누적 → 중복 병합.
+        각 배치 결과는 개별 캐시. 최종 병합 결과도 캐시.
         """
         if run_codex_prompt is None:
             raise RuntimeError(
@@ -388,75 +390,128 @@ class ChunkedSynthesizer:
                 "ensure codex_oauth.py is importable."
             )
 
-        # 캐시 확인
-        cache_file: Path | None = None
+        # 최종 캐시 확인
+        merged_cache: Path | None = None
         if cache_dir:
             cache_dir.mkdir(parents=True, exist_ok=True)
-            cache_file = cache_dir / "codex_map_claims.json"
-            if cache_file.exists():
+            merged_cache = cache_dir / "codex_map_claims.json"
+            if merged_cache.exists():
                 try:
-                    cached = json.loads(cache_file.read_text(encoding="utf-8"))
+                    cached = json.loads(merged_cache.read_text(encoding="utf-8"))
                     logger.info("Codex MAP loaded from cache (%d claims)", len(cached.get("claims", [])))
                     return self._claims_to_extractions(cached, docs)
                 except Exception:
-                    pass  # corrupted cache, re-run
+                    pass
 
-        # Codex MAP 프롬프트 생성
-        doc_listing = "\n".join(f"- {p}" for p in docs)
-        prompt = CODEX_MAP_PROMPT_TEMPLATE.format(
-            doc_count=len(docs),
-            doc_listing=doc_listing,
-        )
+        # 배치 분할
+        batch_size = self.CODEX_MAP_BATCH_SIZE
+        batches = [docs[i:i + batch_size] for i in range(0, len(docs), batch_size)]
+        all_claims: list[dict] = []
+        all_patterns: dict[str, list[str]] = {"반복_입력자료": [], "반복_산출물": [], "절차_단계": []}
+        total_start = time.time()
 
-        logger.info("Codex MAP: %d docs 전송...", len(docs))
-        start = time.time()
+        for batch_idx, batch in enumerate(batches):
+            # 배치별 캐시
+            batch_cache: Path | None = None
+            if cache_dir:
+                batch_cache = cache_dir / f"codex_map_batch_{batch_idx}.json"
+                if batch_cache.exists():
+                    try:
+                        cached_batch = json.loads(batch_cache.read_text(encoding="utf-8"))
+                        logger.info("Codex MAP batch %d/%d loaded from cache (%d claims)",
+                                     batch_idx + 1, len(batches), len(cached_batch.get("claims", [])))
+                        all_claims.extend(cached_batch.get("claims", []))
+                        for k in all_patterns:
+                            all_patterns[k].extend(cached_batch.get("patterns", {}).get(k, []))
+                        continue
+                    except Exception:
+                        pass
 
-        result = run_codex_prompt(
-            prompt=prompt,
-            cwd=str(Path.cwd()),
-            reasoning_effort="high",
-            output_schema=CODEX_MAP_CLAIM_SCHEMA,
-            timeout_s=600.0,
-        )
+            doc_listing = "\n".join(f"- {p}" for p in batch)
+            prompt = CODEX_MAP_PROMPT_TEMPLATE.format(
+                doc_count=len(batch),
+                doc_listing=doc_listing,
+            )
 
-        elapsed = time.time() - start
-        logger.info("Codex MAP 완료: %.1fs (ok=%s)", elapsed, result["ok"])
+            logger.info("Codex MAP batch %d/%d: %d docs 전송...", batch_idx + 1, len(batches), len(batch))
+            start = time.time()
 
-        if not result["ok"]:
-            logger.error("Codex MAP failed: %s", result["message"])
+            result = run_codex_prompt(
+                prompt=prompt,
+                cwd=str(Path.cwd()),
+                reasoning_effort="high",
+                output_schema=CODEX_MAP_CLAIM_SCHEMA,
+                timeout_s=600.0,
+            )
+
+            elapsed = time.time() - start
+            logger.info("Codex MAP batch %d/%d 완료: %.1fs (ok=%s)", batch_idx + 1, len(batches), elapsed, result["ok"])
+
+            if not result["ok"]:
+                logger.warning("Codex MAP batch %d failed: %s", batch_idx + 1, result["message"])
+                continue
+
+            # 응답 파싱
+            batch_data = self._parse_codex_response(result.get("output", ""))
+            if batch_data is None:
+                logger.warning("Codex MAP batch %d: invalid JSON response", batch_idx + 1)
+                continue
+
+            batch_claims = batch_data.get("claims", [])
+            batch_patterns = batch_data.get("patterns", {})
+            logger.info("Codex MAP batch %d: %d claims, patterns: %s",
+                         batch_idx + 1, len(batch_claims),
+                         {k: len(v) for k, v in batch_patterns.items()})
+
+            all_claims.extend(batch_claims)
+            for k in all_patterns:
+                all_patterns[k].extend(batch_patterns.get(k, []))
+
+            # 배치별 캐시 저장
+            if batch_cache:
+                try:
+                    batch_cache.write_text(
+                        json.dumps(batch_data, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+
+        total_elapsed = time.time() - total_start
+        logger.info("Codex MAP total: %d batches, %d claims, %.1fs", len(batches), len(all_claims), total_elapsed)
+
+        if not all_claims:
+            logger.error("Codex MAP produced 0 claims across all batches")
             return []
 
-        # 응답 파싱
+        # 패턴 중복 제거
+        merged_patterns = {k: list(dict.fromkeys(v)) for k, v in all_patterns.items()}
+
+        merged_data = {"claims": all_claims, "patterns": merged_patterns}
+
+        # 최종 캐시 저장
+        if merged_cache:
+            try:
+                merged_cache.write_text(
+                    json.dumps(merged_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                logger.warning("Failed to write merged Codex MAP cache")
+
+        return self._claims_to_extractions(merged_data, docs)
+
+    @staticmethod
+    def _parse_codex_response(output: str) -> dict | None:
+        """Parse Codex MAP JSON response, with fallback extraction."""
+        if not output:
+            return None
         try:
-            claims_data = json.loads(result["output"])
+            return json.loads(output)
         except (json.JSONDecodeError, TypeError):
-            # JSON 추출 시도
-            match = re.search(r'\{[\s\S]*\}', result.get("output", "") or "")
+            match = re.search(r'\{[\s\S]*\}', output)
             if match:
                 try:
-                    claims_data = json.loads(match.group())
+                    return json.loads(match.group())
                 except json.JSONDecodeError:
-                    logger.error("Codex MAP response is not valid JSON")
-                    return []
-            else:
-                logger.error("Codex MAP response contains no JSON")
-                return []
-
-        logger.info("Codex MAP: %d claims, patterns: %s",
-                     len(claims_data.get("claims", [])),
-                     {k: len(v) for k, v in claims_data.get("patterns", {}).items()})
-
-        # 캐시 저장
-        if cache_file:
-            try:
-                cache_file.write_text(
-                    json.dumps(claims_data, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-            except Exception:
-                logger.warning("Failed to write Codex MAP cache")
-
-        return self._claims_to_extractions(claims_data, docs)
+                    return None
+            return None
 
     @staticmethod
     def _claims_to_extractions(claims_data: dict, docs: list[Path]) -> list[dict]:
