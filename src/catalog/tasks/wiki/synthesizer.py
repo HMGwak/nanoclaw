@@ -1,8 +1,20 @@
 """ChunkedSynthesizer - Map-Reduce wiki synthesis engine.
 
-Map phase : split docs into batches of ~batch_size, extract structured patterns
-            per batch via LLM (returns JSON).
-Reduce phase: merge all batch extractions into a single wiki note (Markdown).
+Map phase : Codex SDK 에이전트가 전체 문서를 병렬 탐색하여 구조화된 claim JSON 반환.
+            (2026-04-08 대체: 기존 배치별 agent.generate() → Codex SDK 1회 호출)
+Reduce phase: merge all extractions into a single wiki note (Markdown).
+
+=== Legacy MAP (2026-04-08 이전) ===
+- 문서를 batch_size 단위로 분할 → 배치마다 agent.generate() 호출
+- 배치 내 패턴만 추출 (배치 간 교차 패턴 미포착)
+- 원문 quote 미보존 (패턴 요약만)
+- 레거시 코드: legacy/map_legacy.py 참조
+
+=== Codex MAP (현재) ===
+- Codex SDK에 전체 문서 경로 전달 → 서브에이전트가 병렬 탐색
+- 문서 간 교차 패턴 포착, 원문 quote 100% 보존
+- 1회 호출로 전체 처리 (claim JSON + patterns)
+- claim → extraction 변환 후 기존 REDUCE와 호환
 
 Supports:
 - create  : build a new wiki note from scratch
@@ -14,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -46,38 +59,82 @@ except ImportError:
     )
 
 
-class MapExtraction(BaseModel):
-    반복_입력자료: list[str] = []
-    반복_산출물: list[str] = []
-    절차_단계: list[str] = []
-    사례별_특이점: list[dict] = []
-    주요_키워드: list[str] = []
+# MapExtraction은 legacy/map_legacy.py로 이동 (2026-04-08)
 
 logger = logging.getLogger(__name__)
 
+# ── Codex MAP 설정 ───────────────────────────────────────────────
+# 2026-04-08: 배치별 agent.generate() 방식에서 Codex SDK 1회 호출로 대체.
+# 레거시 MAP 코드: legacy/map_legacy.py 참조.
 
-# ── Prompts ───────────────────────────────────────────────────────
+try:
+    from catalog.sdk_profiles.codex_oauth import run_codex_prompt
+except ImportError:
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from catalog.sdk_profiles.codex_oauth import run_codex_prompt  # type: ignore[no-redef]
+    except ImportError:
+        run_codex_prompt = None  # type: ignore[assignment]
 
-MAP_SYSTEM_PROMPT = """\
-You are an expert at extracting recurring patterns from raw work documents.
-Analyze the given batch of raw documents and respond ONLY with a JSON object in the following structure.
-
-{
-  "반복_입력자료": ["item1", "item2", ...],
-  "반복_산출물": ["item1", "item2", ...],
-  "절차_단계": ["1. step", "2. step", ...],
-  "사례별_특이점": [
-    {"사례": "filename or case identifier", "특이사항": "description"}
-  ],
-  "주요_키워드": ["keyword1", "keyword2", ...]
+CODEX_MAP_CLAIM_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "claim": {"type": "string"},
+                    "quote": {"type": "string"},
+                    "doc_id": {"type": "string"},
+                    "section_target": {"type": "string"},
+                    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                },
+                "required": ["claim", "quote", "doc_id", "section_target", "confidence"],
+            },
+        },
+        "patterns": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "반복_입력자료": {"type": "array", "items": {"type": "string"}},
+                "반복_산출물": {"type": "array", "items": {"type": "string"}},
+                "절차_단계": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["반복_입력자료", "반복_산출물", "절차_단계"],
+        },
+    },
+    "required": ["claims", "patterns"],
 }
 
-Rules:
-- Output ONLY valid JSON. No other text.
-- Do NOT add any content not present in the raw documents (no hallucination).
-- Prioritize patterns that appear repeatedly across documents.
-- Write all extracted values in Korean, matching the original document language.
-"""
+CODEX_MAP_PROMPT_TEMPLATE = """\
+당신은 문서 분석 오케스트레이터입니다.
+아래 {doc_count}개 문서에서 반복 패턴과 개별 claim을 추출하세요.
+
+문서 경로 목록:
+{doc_listing}
+
+작업 절차:
+1. 각 문서를 cat으로 읽으세요
+2. 각 문서에서 핵심 사실/절차/이슈를 claim으로 추출하세요
+3. 중복되는 claim은 병합하고 doc_id 목록을 통합하세요
+4. 반복 패턴 (입력자료, 산출물, 절차 단계)을 정리하세요
+5. 모든 문서 처리 후 최종 JSON을 반환하세요
+
+각 claim에 반드시 포함할 필드:
+- claim: 핵심 사실 (한국어)
+- quote: 원문 근거 1-2문장
+- doc_id: 파일명 (여러 문서에 걸친 경우 세미콜론으로 연결)
+- section_target: 이 claim이 들어갈 wiki 섹션 (예: "## 절차", "## 열린 이슈")
+- confidence: high/medium/low
+
+원문에 없는 내용은 절대 추가하지 마세요."""
+
+
+# ── Prompts (REDUCE) ─────────────────────────────────────────────
 
 _REDUCE_SYSTEM_BASE = """\
 You are an expert wiki author. Synthesize the extracted pattern JSONs from multiple batches into a structured wiki note.
@@ -109,7 +166,8 @@ _DEFAULT_STRUCTURE = [
 ]
 
 
-def _build_reduce_system_prompt(doc_structure: list[str] | None = None) -> str:
+def _build_structure_block(doc_structure: list[str] | None = None) -> str:
+    """Build the wiki structure instruction block (shared by reduce and incremental prompts)."""
     headings = doc_structure or _DEFAULT_STRUCTURE
     lines = [
         "IMPORTANT: You MUST use EXACTLY the following heading structure. Do NOT add, rename, or reorder sections.",
@@ -132,8 +190,56 @@ def _build_reduce_system_prompt(doc_structure: list[str] | None = None) -> str:
         lines.append("- PMI and PMIzhora are NOT countries — they are partner organizations. Treat them as SEPARATE headings (e.g. ### PMI, ### PMIzhora) distinct from country headings.")
         lines.append("- If a document involves both a country AND PMI/PMIzhora, place country-specific content under the country heading and PMI/PMIzhora coordination content under the respective partner heading.")
 
-    structure_block = "\n".join(lines)
+    return "\n".join(lines)
+
+
+def _build_reduce_system_prompt(doc_structure: list[str] | None = None) -> str:
+    structure_block = _build_structure_block(doc_structure)
     return _REDUCE_SYSTEM_BASE.format(structure_block=structure_block)
+
+INCREMENTAL_CREATE_SYSTEM_PROMPT = """\
+You are an expert wiki author. Read the raw work documents below and create a structured wiki note.
+
+{structure_block}
+
+Rules:
+- Use Obsidian-standard footnotes:
+  - In-text: [^1][^2] (numeric, short)
+  - At bottom in ## 각주 section: [^1]: [[(filename)]]
+  - Omit .md extension from footnote definitions
+- Every factual sentence MUST have at least one footnote citation referencing the source document.
+- Do NOT add any content not present in the raw documents (no hallucination).
+- Write concretely so a new team member can perform the same task using only this wiki.
+- Write ALL output in Korean.
+- Use bullet points (- ), numbered lists (1. 2. 3.), and indentation actively to improve readability.
+- Prefer structured lists over long prose paragraphs.
+"""
+
+INCREMENTAL_UPDATE_SYSTEM_PROMPT = """\
+You are an expert wiki update author.
+Read the raw work documents below and update the existing wiki with new information.
+
+The existing wiki is provided as a JSON node array. Each node has: id, type, content, parent, indent.
+
+Respond ONLY with a JSON array of diffs:
+[
+  {"action": "update", "id": 3, "content": "new content with [^N] citation"},
+  {"action": "insert_after", "id": 7, "type": "list", "parent": 5, "indent": 1, "content": "added item [^N]"},
+  {"action": "delete", "id": 10},
+  {"action": "append_child", "parent": 4, "type": "list", "indent": 0, "content": "new list item [^N]"}
+]
+
+Rules:
+- Target nodes by id (NOT by line number or text matching).
+- When adding nodes: type and parent are required.
+- Footnotes: use type="footnote_def", ref=number. Obsidian format: in-text [^1], bottom [^1]: [[(filename)]].
+- Continue footnote numbering from the highest existing number.
+- Preserve existing content; only add/modify with new information from the raw documents.
+- Every new factual sentence MUST cite the source document via footnote.
+- Remove duplicates and update with the latest information.
+- Do NOT add any content not present in the provided raw documents (no hallucination).
+- Write ALL content values in Korean.
+"""
 
 UPDATE_REDUCE_SYSTEM_PROMPT = """\
 You are an expert wiki update author.
@@ -213,7 +319,7 @@ class ChunkedSynthesizer:
             logger.warning("synthesize() called with empty docs list")
             return (existing_wiki or "", [])
 
-        # Map phase - processes all docs in batches (with checkpoint support)
+        # Map phase — Codex SDK가 전체 문서를 1회 호출로 분석
         extractions = self._map(docs, cache_dir=cache_dir)
         if not extractions:
             return (existing_wiki or "", [])
@@ -221,22 +327,14 @@ class ChunkedSynthesizer:
         # Track successfully processed docs
         self._succeeded_docs: list[str] = []
 
-        # Reduce phase - iterative update to avoid model degradation
+        # Reduce phase
+        # Codex MAP은 항상 1개 extraction을 반환 (전체 문서 통합 분석).
         if existing_wiki:
             wiki = self._update_reduce(extractions, existing_wiki, docs, domain)
         else:
-            # Iterative create: Use first batch to create initial wiki, then update
-            logger.info("Creating initial wiki from first batch")
-            first_batch_docs = docs[:self.batch_size]
-            wiki = self._create_reduce([extractions[0]], first_batch_docs, domain)
-            # First batch create is always counted as success if map succeeded
+            wiki = self._create_reduce(extractions, docs, domain)
             if extractions[0].get("_map_ok", True):
                 self._succeeded_docs.extend(extractions[0].get("_source_paths", []))
-
-            if len(extractions) > 1:
-                logger.info("Iteratively updating wiki with remaining %d batches", len(extractions) - 1)
-                remaining_docs = docs[self.batch_size:]
-                wiki = self._update_reduce(extractions[1:], wiki, remaining_docs, domain)
 
         # Post-processing
         wiki = strip_code_blocks(wiki)
@@ -246,54 +344,136 @@ class ChunkedSynthesizer:
         logger.info("Successfully processed %d/%d docs", len(succeeded), len(docs))
         return (wiki, succeeded)
 
-    # ── Map phase ─────────────────────────────────────────────────
+    # ── Map phase (Codex SDK) ────────────────────────────────────
+    # 2026-04-08 대체: 배치별 agent.generate() → Codex SDK 1회 호출.
+    # 기존 코드: legacy/map_legacy.py 참조.
+    #
+    # [작동 원리]
+    # 1. 전체 문서 경로를 Codex SDK에 전달 (run_codex_prompt)
+    # 2. Codex 오케스트레이터가 doc_explorer 서브에이전트를 병렬 소환
+    # 3. 각 서브에이전트가 문서를 읽고 claim(사실/절차/이슈) 추출
+    # 4. 오케스트레이터가 claim 누적/중복 병합/패턴 정제 → JSON 반환
+    # 5. _claims_to_extractions()로 기존 REDUCE 호환 형태로 변환
 
     def _map(self, docs: list[Path], cache_dir: Path | None = None) -> list[dict]:
-        """Extract patterns from each batch; return list of parsed dicts.
+        """Codex SDK MAP: 전체 문서를 1회 호출로 분석하여 claim 추출.
 
-        When *cache_dir* is provided, each batch result is saved to
-        ``cache_dir/map_cache/batch_{i}.json`` after processing.  On retry,
-        already-cached batches are loaded from disk instead of calling the LLM.
+        Codex 에이전트가 서브에이전트를 병렬로 소환하여 각 문서를 탐색하고,
+        구조화된 claim JSON을 반환한다. 결과는 기존 REDUCE와 호환되는
+        extraction 형태로 변환된다.
+
+        캐시: cache_dir/codex_map_claims.json에 Codex 응답을 저장.
         """
-        batches = self._batch(docs, self.batch_size)
-        extractions: list[dict] = []
-        map_cache_dir: Path | None = None
+        if run_codex_prompt is None:
+            raise RuntimeError(
+                "Codex SDK not available. Install @openai/codex-sdk and "
+                "ensure codex_oauth.py is importable."
+            )
+
+        # 캐시 확인
+        cache_file: Path | None = None
         if cache_dir:
-            map_cache_dir = cache_dir / "map_cache"
-            map_cache_dir.mkdir(parents=True, exist_ok=True)
-
-        for i, batch in enumerate(batches):
-            cache_file = map_cache_dir / f"batch_{i}.json" if map_cache_dir else None
-
-            # Try loading from cache
-            if cache_file and cache_file.exists():
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_file = cache_dir / "codex_map_claims.json"
+            if cache_file.exists():
                 try:
                     cached = json.loads(cache_file.read_text(encoding="utf-8"))
-                    logger.info("Map batch %d/%d loaded from cache", i + 1, len(batches))
-                    extractions.append(cached)
-                    continue
+                    logger.info("Codex MAP loaded from cache (%d claims)", len(cached.get("claims", [])))
+                    return self._claims_to_extractions(cached, docs)
                 except Exception:
-                    pass  # corrupted cache, re-process
+                    pass  # corrupted cache, re-run
 
-            logger.info("Map batch %d/%d (%d docs)", i + 1, len(batches), len(batch))
-            raw_text = self._build_batch_text(batch)
-            response = self.agent.generate(
-                system_prompt=MAP_SYSTEM_PROMPT,
-                user_prompt=f"=== 배치 {i + 1} / {len(batches)} ===\n\n{raw_text}",
-            )
-            parsed = self._parse_map_response(response, batch)
-            extractions.append(parsed)
+        # Codex MAP 프롬프트 생성
+        doc_listing = "\n".join(f"- {p}" for p in docs)
+        prompt = CODEX_MAP_PROMPT_TEMPLATE.format(
+            doc_count=len(docs),
+            doc_listing=doc_listing,
+        )
 
-            # Save to cache
-            if cache_file:
+        logger.info("Codex MAP: %d docs 전송...", len(docs))
+        start = time.time()
+
+        result = run_codex_prompt(
+            prompt=prompt,
+            cwd=str(Path.cwd()),
+            reasoning_effort="high",
+            output_schema=CODEX_MAP_CLAIM_SCHEMA,
+            timeout_s=600.0,
+        )
+
+        elapsed = time.time() - start
+        logger.info("Codex MAP 완료: %.1fs (ok=%s)", elapsed, result["ok"])
+
+        if not result["ok"]:
+            logger.error("Codex MAP failed: %s", result["message"])
+            return []
+
+        # 응답 파싱
+        try:
+            claims_data = json.loads(result["output"])
+        except (json.JSONDecodeError, TypeError):
+            # JSON 추출 시도
+            match = re.search(r'\{[\s\S]*\}', result.get("output", "") or "")
+            if match:
                 try:
-                    cache_file.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
-                except Exception:
-                    logger.warning("Failed to write map cache for batch %d", i + 1)
+                    claims_data = json.loads(match.group())
+                except json.JSONDecodeError:
+                    logger.error("Codex MAP response is not valid JSON")
+                    return []
+            else:
+                logger.error("Codex MAP response contains no JSON")
+                return []
 
-        return extractions
+        logger.info("Codex MAP: %d claims, patterns: %s",
+                     len(claims_data.get("claims", [])),
+                     {k: len(v) for k, v in claims_data.get("patterns", {}).items()})
+
+        # 캐시 저장
+        if cache_file:
+            try:
+                cache_file.write_text(
+                    json.dumps(claims_data, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except Exception:
+                logger.warning("Failed to write Codex MAP cache")
+
+        return self._claims_to_extractions(claims_data, docs)
+
+    @staticmethod
+    def _claims_to_extractions(claims_data: dict, docs: list[Path]) -> list[dict]:
+        """Codex claim JSON → 기존 REDUCE 호환 extraction 형태로 변환."""
+        patterns = claims_data.get("patterns", {})
+        claims = claims_data.get("claims", [])
+
+        cases = []
+        keywords: set[str] = set()
+        for c in claims:
+            cases.append({
+                "사례": c.get("doc_id", ""),
+                "특이사항": f"{c['claim']} — \"{c.get('quote', '')}\"",
+                "section_target": c.get("section_target", ""),
+                "confidence": c.get("confidence", "medium"),
+            })
+            for word in c.get("claim", "").split():
+                if len(word) > 2:
+                    keywords.add(word)
+
+        extraction = {
+            "반복_입력자료": patterns.get("반복_입력자료", []),
+            "반복_산출물": patterns.get("반복_산출물", []),
+            "절차_단계": patterns.get("절차_단계", []),
+            "사례별_특이점": cases,
+            "주요_키워드": list(keywords)[:20],
+            "_sources": [p.name for p in docs],
+            "_source_paths": [str(p) for p in docs],
+            "_map_ok": True,
+        }
+
+        return [extraction]
 
     def _build_batch_text(self, batch: list[Path]) -> str:
+        """Build concatenated text from a batch of docs (used by incremental mode)."""
         parts: list[str] = []
         for path in batch:
             try:
@@ -310,30 +490,6 @@ class ChunkedSynthesizer:
                     parts.append(f"--- [참조됨: {path.name} → {link_path.name}] ---\n{link_content}")
 
         return "\n\n".join(parts)
-
-    def _parse_map_response(self, response: str, batch: list[Path]) -> dict:
-        """Parse LLM JSON response; fall back to empty structure on error."""
-        sources = [p.name for p in batch]
-        source_paths = [str(p) for p in batch]
-        extraction = try_parse_validated(response, MapExtraction)
-        if extraction:
-            data = extraction.model_dump()
-            data["_sources"] = sources
-            data["_source_paths"] = source_paths
-            data["_map_ok"] = True
-            return data
-        else:
-            logger.warning("Map response parse failed, using empty extraction")
-            return {
-                "반복_입력자료": [],
-                "반복_산출물": [],
-                "절차_단계": [],
-                "사례별_특이점": [],
-                "주요_키워드": [],
-                "_sources": sources,
-                "_source_paths": source_paths,
-                "_map_ok": False,
-            }
 
     # ── Reduce phase ──────────────────────────────────────────────
 
@@ -389,6 +545,111 @@ class ChunkedSynthesizer:
                 self._succeeded_docs.extend(ext.get("_source_paths", []))
 
         return current_wiki
+
+    # ── Incremental (single-pass) synthesis ──────────────────────
+
+    def synthesize_incremental(
+        self,
+        docs: list[Path],
+        existing_wiki: str | None = None,
+        domain: str = "",
+        cache_dir: Path | None = None,
+    ) -> tuple[str, list[str]]:
+        """Single-pass incremental synthesis: raw docs → wiki directly (no MAP phase).
+
+        Each batch of raw documents is fed directly to the LLM along with the
+        current wiki state.  The LLM generates MdDiff operations to integrate
+        new information.  This avoids the 2-pass overhead of map-reduce and
+        preserves original document detail better.
+
+        Returns:
+            Tuple of (wiki markdown string, list of successfully processed doc paths).
+        """
+        if not docs:
+            logger.warning("synthesize_incremental() called with empty docs list")
+            return (existing_wiki or "", [])
+
+        # Smaller batch size for incremental — raw text is larger than pattern JSON
+        inc_batch_size = min(10, self.batch_size)
+        batches = self._batch(docs, inc_batch_size)
+        wiki = existing_wiki or ""
+        succeeded: list[str] = []
+
+        inc_cache_dir: Path | None = None
+        if cache_dir:
+            inc_cache_dir = cache_dir / "incremental_cache"
+            inc_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        for i, batch in enumerate(batches):
+            cache_file = inc_cache_dir / f"step_{i}.md" if inc_cache_dir else None
+
+            # Try loading cached wiki state
+            if cache_file and cache_file.exists():
+                try:
+                    wiki = cache_file.read_text(encoding="utf-8")
+                    logger.info("Incremental batch %d/%d loaded from cache", i + 1, len(batches))
+                    succeeded.extend(str(p) for p in batch)
+                    continue
+                except Exception:
+                    pass
+
+            logger.info("Incremental batch %d/%d (%d docs)", i + 1, len(batches), len(batch))
+            raw_text = self._build_batch_text(batch)
+            source_list = "\n".join(f"- {p.name}" for p in batch)
+            domain_line = f"도메인: {domain}\n\n" if domain else ""
+
+            if not wiki:
+                # First batch, no existing wiki → create from scratch
+                system_prompt = INCREMENTAL_CREATE_SYSTEM_PROMPT.format(
+                    structure_block=_build_structure_block(self.doc_structure),
+                )
+                user_prompt = (
+                    f"{domain_line}"
+                    f"=== raw 문서 ({len(batch)}건) ===\n\n{raw_text}\n\n"
+                    f"=== 문서 목록 (각주용) ===\n{source_list}"
+                )
+                wiki = self.agent.generate(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                )
+                wiki = strip_code_blocks(wiki)
+            else:
+                # Subsequent batches → update existing wiki via MdDiff
+                nodes = md_to_json(wiki)
+                nodes_json = json.dumps(
+                    [n.model_dump() for n in nodes], ensure_ascii=False, indent=2,
+                )
+                user_prompt = (
+                    f"{domain_line}"
+                    f"기존 wiki (JSON 노드):\n{nodes_json}\n\n"
+                    f"=== 신규 raw 문서 ({len(batch)}건) ===\n\n{raw_text}\n\n"
+                    f"=== 이번 배치 문서 목록 (각주용) ===\n{source_list}"
+                )
+                diff_response = self.agent.generate(
+                    system_prompt=INCREMENTAL_UPDATE_SYSTEM_PROMPT,
+                    user_prompt=user_prompt,
+                )
+                prev_wiki = wiki
+                wiki = self._apply_section_diffs(wiki, diff_response)
+
+                if wiki == prev_wiki:
+                    logger.warning("Incremental batch %d produced no changes", i + 1)
+
+            succeeded.extend(str(p) for p in batch)
+
+            # Cache wiki state after this batch
+            if cache_file:
+                try:
+                    cache_file.write_text(wiki, encoding="utf-8")
+                except Exception:
+                    logger.warning("Failed to write incremental cache for batch %d", i + 1)
+
+        # Post-processing
+        wiki = strip_code_blocks(wiki)
+        wiki = filter_attachment_footnotes(wiki)
+
+        logger.info("Incremental synthesis: %d/%d docs succeeded", len(succeeded), len(docs))
+        return (wiki, succeeded)
 
     def _apply_section_diffs(self, original: str, response: str) -> str:
         """Apply JSON node diffs from LLM response."""
