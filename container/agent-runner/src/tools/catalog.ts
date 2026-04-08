@@ -470,6 +470,70 @@ export const allTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'wiki_synthesis',
+      description:
+        'Start a wiki synthesis or update workflow. Provide domain and wiki_output_dir — rubric_file and base_file are auto-discovered from the domain name if omitted. Ask the user for wiki_output_dir if not specified.',
+      parameters: {
+        type: 'object',
+        properties: {
+          domain: {
+            type: 'string',
+            description: 'Domain name (e.g. "안전성검토", "첨가물정보제출")',
+          },
+          wiki_output_dir: {
+            type: 'string',
+            description:
+              'Absolute host path to the Obsidian folder where the finished wiki note will be saved (e.g. /Users/planee/Documents/Mywork/3. Resource/LLM Knowledge Base/wiki)',
+          },
+          rubric_file: {
+            type: 'string',
+            description: 'Optional: path to rubric .md file. Auto-discovered if omitted.',
+          },
+          base_file: {
+            type: 'string',
+            description: 'Optional: path to .base index file. Auto-discovered if omitted.',
+          },
+          filter: {
+            type: 'string',
+            description: 'Optional glob filter pattern for documents',
+          },
+          vault_root: {
+            type: 'string',
+            description:
+              'Obsidian vault root host path. Defaults to /Users/planee/Documents/Mywork',
+          },
+          model: {
+            type: 'string',
+            description: 'LLM model override (default: gpt-5.4)',
+          },
+        },
+        required: ['domain', 'wiki_output_dir'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'safe_shell',
+      description:
+        'Run a read-only shell command for exploration (ls, cat, find, grep, etc.). Destructive commands (rm, mv, chmod, redirects) are blocked.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: {
+            type: 'string',
+            description: 'Shell command to run (read-only operations only)',
+          },
+        },
+        required: ['command'],
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 export function filterTools(

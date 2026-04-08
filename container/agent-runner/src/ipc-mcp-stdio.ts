@@ -749,6 +749,139 @@ if (canStartWorkflow) {
   );
 }
 
+// ── wiki_synthesis ───────────────────────────────────────────────
+if (canStartWorkflow) {
+  server.registerTool(
+    'wiki_synthesis',
+    {
+      description:
+        'Start a wiki synthesis or update workflow. Provide domain and wiki_output_dir — rubric_file and base_file are auto-discovered from the domain name if omitted. Ask the user for wiki_output_dir if not specified.',
+      inputSchema: {
+        domain: z.string().describe('Domain name (e.g. "안전성검토", "첨가물정보제출")'),
+        wiki_output_dir: z
+          .string()
+          .describe('Absolute host path to the Obsidian folder where the finished wiki note will be saved (e.g. /Users/planee/Documents/Mywork/3. Resource/LLM Knowledge Base/wiki)'),
+        rubric_file: z
+          .string()
+          .optional()
+          .describe('Optional: path to rubric .md file. Auto-discovered if omitted.'),
+        base_file: z
+          .string()
+          .optional()
+          .describe('Optional: path to .base index file. Auto-discovered if omitted.'),
+        filter: z
+          .string()
+          .optional()
+          .describe('Optional glob filter pattern for documents'),
+        vault_root: z
+          .string()
+          .optional()
+          .describe('Obsidian vault root host path. Defaults to /Users/planee/Documents/Mywork'),
+        model: z
+          .string()
+          .optional()
+          .describe('LLM model override (default: gpt-5.4)'),
+      },
+    },
+    async (args) => {
+      const vaultRoot = args.vault_root || '/Users/planee/Documents/Mywork';
+
+      // Convert container paths to host paths
+      const toHostPath = (p: string): string => {
+        if (p.startsWith('/workspace/extra/vault/')) {
+          return path.join(vaultRoot, p.slice('/workspace/extra/vault/'.length));
+        }
+        if (p.startsWith('/workspace/extra/obsidian-vault/')) {
+          return path.join(vaultRoot, p.slice('/workspace/extra/obsidian-vault/'.length));
+        }
+        if (p.startsWith('/workspace/project/')) {
+          return p.slice('/workspace/project/'.length);
+        }
+        return p;
+      };
+
+      // Auto-discover rubric file if not provided
+      const findRubricFile = (): string => {
+        const rubricsDir = '/workspace/project/src/catalog/tasks/wiki/rubrics';
+        try {
+          const files = fs.readdirSync(rubricsDir);
+          // Exact match first
+          const exact = files.find(f => f.includes(args.domain) && f.endsWith('.md'));
+          if (exact) return path.join(rubricsDir, exact);
+          // Partial match (normalize Korean)
+          const normalized = args.domain.replace(/\s+/g, '');
+          const partial = files.find(f => f.replace(/\s+/g, '').includes(normalized) && f.endsWith('.md'));
+          if (partial) return path.join(rubricsDir, partial);
+        } catch { /* ignore */ }
+        return '';
+      };
+
+      // Auto-discover base file if not provided
+      const findBaseFile = (): string => {
+        const vaultIndexDir = '/workspace/extra/vault/3. Resource/LLM Knowledge Base/index';
+        const altDir = '/workspace/extra/obsidian-vault/3. Resource/LLM Knowledge Base/index';
+        for (const dir of [vaultIndexDir, altDir]) {
+          try {
+            const files = fs.readdirSync(dir);
+            const normalized = args.domain.replace(/\s+/g, '');
+            const match = files.find(f =>
+              f.endsWith('.base') &&
+              f.replace(/\s+/g, '').includes(normalized)
+            );
+            if (match) return path.join(dir, match);
+          } catch { /* ignore */ }
+        }
+        return '';
+      };
+
+      const rubricPath = args.rubric_file || findRubricFile();
+      const basePath = args.base_file || findBaseFile();
+
+      if (!rubricPath) {
+        return { content: [{ type: 'text' as const, text: `Error: rubric file not found for domain "${args.domain}". Please specify rubric_file manually.` }] };
+      }
+
+      const qualityLoopConfig: Record<string, string> = {
+        task: 'wiki_task.WikiTask',
+        rubric: toHostPath(rubricPath),
+        domain: args.domain,
+        vault_root: vaultRoot,
+        wiki_output_dir: args.wiki_output_dir,
+      };
+      if (basePath) qualityLoopConfig.base = toHostPath(basePath);
+      if (args.filter) qualityLoopConfig.filter = args.filter;
+      if (args.model) qualityLoopConfig.model = args.model;
+
+      const data = {
+        type: 'start_workflow',
+        chatJid,
+        groupFolder,
+        title: `Wiki Synthesis: ${args.domain}`,
+        steps: [
+          {
+            assignee: groupFolder,
+            goal: `${args.domain} 도메인의 wiki note를 raw 문서에서 합성`,
+            acceptance_criteria: [JSON.stringify(qualityLoopConfig)],
+            constraints: ['Archive 폴더 문서만 대상', 'hallucination 금지'],
+            stage_id: 'execute',
+          },
+        ],
+        timestamp: new Date().toISOString(),
+      };
+
+      const filename = writeIpcFile(TASKS_DIR, data);
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Wiki synthesis workflow started for domain "${args.domain}" (${filename}). The quality-loop engine will run and write results to ${args.wiki_output_dir}.`,
+          },
+        ],
+      };
+    },
+  );
+}
+
 // Safe read-only shell tool
 const SAFE_SHELL_ALLOWED = /^(python3?|ls|find|cat|head|tail|grep|echo|which|wc|stat|file)\b/;
 const SAFE_SHELL_BLOCKED = /\brm\b|\brmdir\b|\bmv\b|\bcp\b|\bchmod\b|\bchown\b|\bdd\b|\bmkfs\b|\btruncate\b|>|>>|\btee\b|\bsqlite3\b|\bsql\b|\bDROP\b|\bDELETE\b|\bTRUNCATE\b/i;

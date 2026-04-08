@@ -193,6 +193,7 @@ class ChunkedSynthesizer:
         existing_wiki: str | None = None,
         domain: str = "",
         reference_files: list[Path] | None = None,
+        cache_dir: Path | None = None,
     ) -> tuple[str, list[str]]:
         """Synthesize docs into a wiki note via map-reduce.
 
@@ -212,8 +213,8 @@ class ChunkedSynthesizer:
             logger.warning("synthesize() called with empty docs list")
             return (existing_wiki or "", [])
 
-        # Map phase - processes all docs in batches
-        extractions = self._map(docs)
+        # Map phase - processes all docs in batches (with checkpoint support)
+        extractions = self._map(docs, cache_dir=cache_dir)
         if not extractions:
             return (existing_wiki or "", [])
 
@@ -247,12 +248,33 @@ class ChunkedSynthesizer:
 
     # ── Map phase ─────────────────────────────────────────────────
 
-    def _map(self, docs: list[Path]) -> list[dict]:
-        """Extract patterns from each batch; return list of parsed dicts."""
+    def _map(self, docs: list[Path], cache_dir: Path | None = None) -> list[dict]:
+        """Extract patterns from each batch; return list of parsed dicts.
+
+        When *cache_dir* is provided, each batch result is saved to
+        ``cache_dir/map_cache/batch_{i}.json`` after processing.  On retry,
+        already-cached batches are loaded from disk instead of calling the LLM.
+        """
         batches = self._batch(docs, self.batch_size)
         extractions: list[dict] = []
+        map_cache_dir: Path | None = None
+        if cache_dir:
+            map_cache_dir = cache_dir / "map_cache"
+            map_cache_dir.mkdir(parents=True, exist_ok=True)
 
         for i, batch in enumerate(batches):
+            cache_file = map_cache_dir / f"batch_{i}.json" if map_cache_dir else None
+
+            # Try loading from cache
+            if cache_file and cache_file.exists():
+                try:
+                    cached = json.loads(cache_file.read_text(encoding="utf-8"))
+                    logger.info("Map batch %d/%d loaded from cache", i + 1, len(batches))
+                    extractions.append(cached)
+                    continue
+                except Exception:
+                    pass  # corrupted cache, re-process
+
             logger.info("Map batch %d/%d (%d docs)", i + 1, len(batches), len(batch))
             raw_text = self._build_batch_text(batch)
             response = self.agent.generate(
@@ -261,6 +283,13 @@ class ChunkedSynthesizer:
             )
             parsed = self._parse_map_response(response, batch)
             extractions.append(parsed)
+
+            # Save to cache
+            if cache_file:
+                try:
+                    cache_file.write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    logger.warning("Failed to write map cache for batch %d", i + 1)
 
         return extractions
 

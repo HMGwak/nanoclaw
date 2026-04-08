@@ -477,8 +477,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     try {
       const sender = resolveGroupTargetSender(group, chatJid);
       await channel.sendMessage(chatJid, '작업을 처리했습니다.', { sender });
-      logger.warn({ group: group.name }, 'Agent returned no output, sent fallback notice');
-    } catch { /* best-effort */ }
+      logger.warn(
+        { group: group.name },
+        'Agent returned no output, sent fallback notice',
+      );
+    } catch {
+      /* best-effort */
+    }
   }
 
   if (output === 'error' || hadError) {
@@ -988,14 +993,23 @@ async function main(): Promise<void> {
     },
     writeGroupIpcMessage: (groupFolder, chatJid, text) => {
       try {
-        const messagesDir = path.join(resolveGroupIpcPath(groupFolder), 'messages');
+        const messagesDir = path.join(
+          resolveGroupIpcPath(groupFolder),
+          'messages',
+        );
         fs.mkdirSync(messagesDir, { recursive: true });
         const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
         const tmp = path.join(messagesDir, `${filename}.tmp`);
-        fs.writeFileSync(tmp, JSON.stringify({ chatJid, text, sender: groupFolder }));
+        fs.writeFileSync(
+          tmp,
+          JSON.stringify({ chatJid, text, sender: groupFolder }),
+        );
         fs.renameSync(tmp, path.join(messagesDir, filename));
       } catch (err) {
-        logger.warn({ groupFolder, err }, 'Failed to write IPC progress message');
+        logger.warn(
+          { groupFolder, err },
+          'Failed to write IPC progress message',
+        );
       }
     },
     registeredGroups: () => registeredGroups,
@@ -1025,28 +1039,31 @@ async function main(): Promise<void> {
       queue.closeStdin(groupJid);
     },
     executeQualityLoop: async (params, onProgress) => {
-      const enginePath = path.resolve(
-        __dirname,
-        '..',
+      const enginePath = path.join(
+        process.cwd(),
         'src',
         'catalog',
         'methods',
         'karpathy-loop',
         'engine.py',
       );
+      const linuxVenvPython = path.join(process.cwd(), '.venv-linux', 'bin', 'python');
       const pythonBin =
         process.env.QUALITY_LOOP_PYTHON ||
-        path.resolve(__dirname, '..', '.venv', 'bin', 'python');
+        (fs.existsSync(linuxVenvPython)
+          ? linuxVenvPython
+          : path.join(process.cwd(), '.venv', 'bin', 'python'));
 
       const args = [
         enginePath,
         '--task',
         params.task,
-        '--rubric',
-        params.rubricPath,
         '--output',
         params.outputDir,
       ];
+      if (params.rubricPath) {
+        args.push('--rubric', params.rubricPath);
+      }
       for (const f of params.inputFiles) {
         args.push('--input', f);
       }
@@ -1079,7 +1096,11 @@ async function main(): Promise<void> {
       const subprocessEnv: Record<string, string> = {
         ...process.env,
       } as Record<string, string>;
-      subprocessEnv.NANOCLAW_AGENT_BACKEND = backendConfig.backend;
+      // Don't pass NANOCLAW_AGENT_BACKEND to quality loop —
+      // it should auto-detect ChatGPT OAuth for LLM calls.
+      delete subprocessEnv.NANOCLAW_AGENT_BACKEND;
+      // Disable Python output buffering so PROGRESS logs appear in real time.
+      subprocessEnv.PYTHONUNBUFFERED = '1';
 
       // OpenAI
       if (backendConfig.openaiApiKey)
@@ -1107,7 +1128,7 @@ async function main(): Promise<void> {
 
       return new Promise((resolve, reject) => {
         const proc = spawn(pythonBin, args, {
-          cwd: path.resolve(__dirname, '..'),
+          cwd: process.cwd(),
           env: subprocessEnv,
           stdio: ['ignore', 'pipe', 'pipe'],
         });

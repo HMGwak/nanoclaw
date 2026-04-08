@@ -521,7 +521,8 @@ async function buildContainerArgs(
     if (baseUrl) args.push('-e', `OPENAI_COMPAT_BASE_URL=${baseUrl}`);
     if (model) args.push('-e', `OPENAI_COMPAT_MODEL=${model}`);
     const fallbackModel = groupCfg?.fallbackModel;
-    if (fallbackModel) args.push('-e', `OPENAI_COMPAT_FALLBACK_MODEL=${fallbackModel}`);
+    if (fallbackModel)
+      args.push('-e', `OPENAI_COMPAT_FALLBACK_MODEL=${fallbackModel}`);
   } else if (backend === 'openai') {
     const apiKey = groupCfg?.apiKey || globalConfig.openaiApiKey;
     const baseUrl =

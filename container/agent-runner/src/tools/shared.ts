@@ -562,6 +562,142 @@ export async function executeTool(
       ctx.log(`IPC start_workflow: ${a.title} → ${filename}`);
       return JSON.stringify({ ok: true, message: `Workflow "${a.title}" submitted (${filename}).` });
     }
+    case 'wiki_synthesis': {
+      const canStart = ctx.env.NANOCLAW_CAN_START_WORKFLOW === '1';
+      if (!canStart) {
+        return JSON.stringify({ ok: false, error: 'Workflow start not permitted for this group.' });
+      }
+      const a = JSON.parse(argsJson) as {
+        domain: string;
+        wiki_output_dir: string;
+        rubric_file?: string;
+        base_file?: string;
+        filter?: string;
+        vault_root?: string;
+        model?: string;
+      };
+      const vaultRoot = a.vault_root || '/Users/planee/Documents/Mywork';
+
+      const toHostPath = (p: string): string => {
+        if (p.startsWith('/workspace/extra/vault/')) {
+          return path.join(vaultRoot, p.slice('/workspace/extra/vault/'.length));
+        }
+        if (p.startsWith('/workspace/extra/obsidian-vault/')) {
+          return path.join(vaultRoot, p.slice('/workspace/extra/obsidian-vault/'.length));
+        }
+        if (p.startsWith('/workspace/project/')) {
+          return p.slice('/workspace/project/'.length);
+        }
+        return p;
+      };
+
+      const findRubricFile = (): string => {
+        const rubricsDir = '/workspace/project/src/catalog/tasks/wiki/rubrics';
+        try {
+          const files = fs.readdirSync(rubricsDir);
+          const exact = files.find((f) => f.includes(a.domain) && f.endsWith('.md'));
+          if (exact) return path.join(rubricsDir, exact);
+          const normalized = a.domain.replace(/\s+/g, '');
+          const partial = files.find(
+            (f) => f.replace(/\s+/g, '').includes(normalized) && f.endsWith('.md'),
+          );
+          if (partial) return path.join(rubricsDir, partial);
+        } catch { /* ignore */ }
+        return '';
+      };
+
+      const findBaseFile = (): string => {
+        const dirs = [
+          '/workspace/extra/vault/3. Resource/LLM Knowledge Base/index',
+          '/workspace/extra/obsidian-vault/3. Resource/LLM Knowledge Base/index',
+        ];
+        for (const dir of dirs) {
+          try {
+            const files = fs.readdirSync(dir);
+            const normalized = a.domain.replace(/\s+/g, '');
+            const match = files.find(
+              (f) => f.endsWith('.base') && f.replace(/\s+/g, '').includes(normalized),
+            );
+            if (match) return path.join(dir, match);
+          } catch { /* ignore */ }
+        }
+        return '';
+      };
+
+      const rubricPath = a.rubric_file || findRubricFile();
+      const basePath = a.base_file || findBaseFile();
+
+      const qualityLoopConfig: Record<string, string> = {
+        task: 'wiki_task.WikiTask',
+        domain: a.domain,
+        vault_root: vaultRoot,
+        wiki_output_dir: a.wiki_output_dir,
+      };
+      if (rubricPath) qualityLoopConfig.rubric = toHostPath(rubricPath);
+      if (basePath) qualityLoopConfig.base = toHostPath(basePath);
+      if (a.filter) qualityLoopConfig.filter = a.filter;
+      if (a.model) qualityLoopConfig.model = a.model;
+
+      const chatJid = ctx.chatJid || ctx.env.NANOCLAW_CHAT_JID || '';
+      const groupFolder = ctx.groupFolder || ctx.env.NANOCLAW_GROUP_FOLDER || '';
+      const data = {
+        type: 'start_workflow',
+        chatJid,
+        groupFolder,
+        title: `Wiki Synthesis: ${a.domain}`,
+        steps: [
+          {
+            assignee: groupFolder,
+            goal: `${a.domain} 도메인의 wiki note를 raw 문서에서 합성`,
+            acceptance_criteria: [JSON.stringify(qualityLoopConfig)],
+            constraints: ['Archive 폴더 문서만 대상', 'hallucination 금지'],
+            stage_id: 'execute',
+          },
+        ],
+        timestamp: new Date().toISOString(),
+      };
+      const wikiFilename = writeIpcFile(IPC_TASKS_DIR, data);
+      ctx.log(`IPC wiki_synthesis: ${a.domain} → ${wikiFilename}`);
+      return JSON.stringify({
+        ok: true,
+        message: `Wiki synthesis workflow started for domain "${a.domain}" (${wikiFilename}). The quality-loop engine will run and write results to ${a.wiki_output_dir}.`,
+      });
+    }
+    case 'safe_shell': {
+      const SAFE_SHELL_ALLOWED = /^(python3?|ls|find|cat|head|tail|grep|echo|which|wc|stat|file)\b/;
+      const SAFE_SHELL_BLOCKED = /\brm\b|\brmdir\b|\bmv\b|\bcp\b|\bchmod\b|\bchown\b|\bdd\b|\bmkfs\b|\btruncate\b|>|>>|\btee\b|\bsqlite3\b|\bsql\b|\bDROP\b|\bDELETE\b|\bTRUNCATE\b/i;
+      const a = JSON.parse(argsJson) as { command: string };
+      const cmd = a.command.trim();
+      if (!SAFE_SHELL_ALLOWED.test(cmd)) {
+        return JSON.stringify({
+          ok: false,
+          error: 'Command not in allowlist. Permitted: python, ls, find, cat, head, tail, grep, echo, which, wc, stat, file',
+        });
+      }
+      if (SAFE_SHELL_BLOCKED.test(cmd)) {
+        return JSON.stringify({ ok: false, error: 'Destructive operation not allowed.' });
+      }
+      const env = Object.fromEntries(
+        Object.entries(ctx.env).filter((e): e is [string, string] => typeof e[1] === 'string'),
+      );
+      try {
+        const { stdout, stderr } = await execFileAsync('/bin/bash', ['-c', cmd], {
+          cwd: '/workspace/group',
+          timeout: 10_000,
+          maxBuffer: 256 * 1024,
+          env,
+        });
+        return JSON.stringify({ ok: true, stdout: truncateOutput(stdout), stderr: truncateOutput(stderr) });
+      } catch (err) {
+        const e = err as { stdout?: string; stderr?: string; message?: string };
+        return JSON.stringify({
+          ok: false,
+          stdout: truncateOutput(e.stdout || ''),
+          stderr: truncateOutput(e.stderr || ''),
+          error: e.message,
+        });
+      }
+    }
 
     default:
       return JSON.stringify({ ok: false, error: `Unknown tool: ${name}` });

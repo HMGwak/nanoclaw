@@ -154,6 +154,17 @@ export async function runChatCompletionLoop(
     }
 
     if (!choice.message.tool_calls || choice.message.tool_calls.length === 0) {
+      // If the model returned text without tool calls on the very first turn and tools are
+      // available, nudge it once to call the appropriate tool instead of stopping.
+      if (loop === 0 && tools && tools.length > 0 && choice.message.content) {
+        loopContext.log('Model returned text without tool call on turn 0 — nudging for tool use');
+        messages.push(choice.message);
+        messages.push({
+          role: 'user',
+          content: 'Please call the appropriate tool to handle this request. Do not write text — call the tool directly.',
+        });
+        continue;
+      }
       break;
     }
 

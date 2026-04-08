@@ -209,7 +209,11 @@ export class DiscordChannel implements Channel {
       let registeredGroup = this.opts.registeredGroups()[chatJid];
       // If the channel is a thread and not registered, check parent channel
       let isThreadFallback = false;
-      if (!registeredGroup && 'parentId' in message.channel && message.channel.parentId) {
+      if (
+        !registeredGroup &&
+        'parentId' in message.channel &&
+        message.channel.parentId
+      ) {
         const parentJid = isPrimary
           ? `dc:${message.channel.parentId}`
           : `dc:${message.channel.parentId}:${bot.label}`;
@@ -221,7 +225,9 @@ export class DiscordChannel implements Channel {
         }
       }
       // Threads that fall back to a parent group don't require a trigger (1:1 thread UX)
-      const requiresTrigger = isThreadFallback ? false : registeredGroup?.requiresTrigger !== false;
+      const requiresTrigger = isThreadFallback
+        ? false
+        : registeredGroup?.requiresTrigger !== false;
 
       // Step 4: Secondary bots normally require a direct mention or reply.
       // Dedicated channels can opt out via requiresTrigger=false.

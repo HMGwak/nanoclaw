@@ -536,6 +536,30 @@ def run_loop(
             if iteration == 1:
                 result = task.run(context)
                 first_run_metadata = result.metadata.copy() if result.metadata else {}
+                # Early exit: task signals no work needed (e.g. no changed docs)
+                if first_run_metadata.get("skipped"):
+                    reason = first_run_metadata.get("reason", "skipped")
+                    logger.info("Task skipped (reason=%s). Exiting loop early.", reason)
+                    if result.output_files:
+                        final_dir = output_dir / "final"
+                        final_dir.mkdir(parents=True, exist_ok=True)
+                        for f in result.output_files:
+                            shutil.copy2(f, final_dir / f.name)
+                    skip_files = list((output_dir / "final").iterdir()) if (output_dir / "final").exists() else []
+                    report = LoopReport(
+                        status="keep",
+                        final_score=100.0,
+                        output_files=skip_files,
+                        history=[],
+                        run_id=run_id,
+                        error=None,
+                    )
+                    _write_report(output_dir / "report.json", report)
+                    if first_run_metadata.get("all_docs"):
+                        _record_tracker(first_run_metadata, run_id, list(final_dir.iterdir()) if final_dir.exists() else [])
+                    if callbacks and callbacks.on_loop_complete:
+                        callbacks.on_loop_complete(report)
+                    return report
             else:
                 feedback = _build_feedback(
                     iteration=iteration - 1,
@@ -761,6 +785,17 @@ def main():
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    # Also log to output_dir/engine.log when --output is provided
+    # (added after basicConfig so stderr handler is preserved)
+    import sys as _sys
+    for _a in _sys.argv:
+        if _a == '--output' and _sys.argv.index(_a) + 1 < len(_sys.argv):
+            _log_dir = Path(_sys.argv[_sys.argv.index(_a) + 1])
+            _log_dir.mkdir(parents=True, exist_ok=True)
+            _fh = logging.FileHandler(_log_dir / "engine.log", encoding="utf-8")
+            _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+            logging.getLogger().addHandler(_fh)
+            break
 
     parser = argparse.ArgumentParser(
         description="""Quality Loop Engine (카파시 루프) — rubric 기반 판정 루프 엔진.
@@ -812,9 +847,10 @@ task의 실행 결과를 rubric으로 평가하여 keep/revise/discard를 반복
     )
     parser.add_argument(
         "--rubric",
-        required=True,
+        required=False,
+        default=None,
         type=Path,
-        help="Path to rubric.md",
+        help="Path to rubric.md (auto-discovered from --domain if omitted)",
     )
     parser.add_argument(
         "--input",
@@ -870,6 +906,20 @@ task의 실행 결과를 rubric으로 평가하여 keep/revise/discard를 반복
 
     args = parser.parse_args()
 
+    # Auto-discover rubric from domain if not provided
+    if args.rubric is None and args.domain is not None:
+        rubrics_dir = Path(__file__).parent.parent.parent / "tasks" / "wiki" / "rubrics"
+        domain_norm = args.domain.replace(" ", "")
+        if rubrics_dir.exists():
+            for f in rubrics_dir.iterdir():
+                if f.suffix == ".md" and (args.domain in f.name or domain_norm in f.name.replace(" ", "")):
+                    args.rubric = f
+                    logger.info("Auto-discovered rubric: %s", f)
+                    break
+    if args.rubric is None:
+        logger.error("--rubric is required when domain-based auto-discovery fails")
+        raise SystemExit(1)
+
     # Load task class
     task = _load_task(args.task)
 
@@ -895,7 +945,7 @@ task의 실행 결과를 rubric으로 평가하여 keep/revise/discard를 반복
     if args.filter is not None:
         context_config["filter"] = args.filter
     if args.base is not None:
-        context_config["base"] = args.base
+        context_config["base_path"] = str(args.base)
     if args.wiki_output_dir is not None:
         context_config["wiki_output_dir"] = args.wiki_output_dir
 
@@ -952,12 +1002,19 @@ def _record_tracker(metadata: dict, run_id: str, final_files: list[Path]) -> Non
         tracker.record_run(run_id, domain, base_path, filter_pattern, all_docs, {})
         tracker.complete_run(run_id, output_count=len(final_files), output_path=output_path)
 
-        # Auto-copy to wiki output dir if specified
+        # Auto-copy to wiki output dir if specified (domain-locked)
         wiki_output_dir = metadata.get("wiki_output_dir")
-        if wiki_output_dir and final_files:
+        if wiki_output_dir and final_files and domain:
+            allowed_filename = f"{domain}.md"
             dest_dir = Path(wiki_output_dir)
             if dest_dir.exists():
                 for f in final_files:
+                    if f.name != allowed_filename:
+                        logger.warning(
+                            "Domain lock: refusing to copy %s (allowed: %s)",
+                            f.name, allowed_filename,
+                        )
+                        continue
                     dest = dest_dir / f.name
                     shutil.copy2(f, dest)
                     logger.info("Auto-copied wiki to %s", dest)

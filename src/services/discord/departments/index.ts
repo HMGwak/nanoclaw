@@ -13,7 +13,7 @@ export interface DiscordDepartmentSpec {
 const DEPARTMENT_NAMES: Record<DiscordDepartmentId, string> = {
   workshop: '작업실',
   planning: '기획실',
-  secretary: '비서실',
+  secretary: '비서',
 };
 
 function departmentAgentsPath(departmentId: DiscordDepartmentId): string {

@@ -192,6 +192,7 @@ CORE_CONTAINER_ID="$(docker create \
   -v "${CORE_NODE_MODULES_VOLUME}:${PROJECT_ROOT}/node_modules" \
   -v "${CORE_NPM_CACHE_VOLUME}:${CONTAINER_HOME}/.npm" \
   -v "${HOST_CONFIG_DIR}:${CONTAINER_HOME}/.config/nanoclaw" \
+  -v "${HOME}/.codex:${CONTAINER_HOME}/.codex:ro" \
   "${EXTRA_MOUNT_ARGS[@]}" \
   -w "${PROJECT_ROOT}" \
   "${ENV_ARGS[@]}" \

@@ -43,7 +43,7 @@ const DISCORD_PERSONNEL: Record<string, DiscordPersonnelSpec> = {
   discord_secretary_lead: {
     id: 'discord_secretary_lead',
     departmentId: 'secretary',
-    displayName: '비서실',
+    displayName: '비서',
     catalogAgentId: 'openai_gpt54_reviewer',
     promptId: 'discord_secretary_lead',
     localToolsetIds: ['discord_secretary_lead_local'],

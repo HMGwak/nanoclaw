@@ -326,16 +326,35 @@ class WikiTask:
         tracker = WikiTracker()
         new, changed, unchanged = tracker.classify_docs(all_docs)
 
-        # 3. Synthesize
+        # 3. Early exit if no changes
+        docs_to_process = new + changed
+        if not docs_to_process:
+            logger.info("No new or changed docs for domain=%s (%d unchanged). Skipping synthesis.", domain, len(unchanged))
+            existing_wiki = self._load_existing_wiki(context.reference_files, domain, wiki_output_dir)
+            if existing_wiki:
+                context.output_dir.mkdir(parents=True, exist_ok=True)
+                out_path = context.output_dir / f"{domain}.md"
+                out_path.write_text(existing_wiki, encoding="utf-8")
+                return RunResult(
+                    output_files=[out_path],
+                    metadata={"domain": domain, "wiki_output_dir": wiki_output_dir, "skipped": True, "reason": "no_changes", "unchanged_count": len(unchanged)},
+                )
+            return RunResult(output_files=[], metadata={"domain": domain, "skipped": True, "reason": "no_changes_no_existing"})
+
+        # Synthesize
         doc_structure = context.config.get("doc_structure")
         synthesizer = ChunkedSynthesizer(self.agent, doc_structure=doc_structure, vault_root=vault_root)
-        existing_wiki = self._load_existing_wiki(context.reference_files, domain)
-        docs_to_process = new + changed
-        wiki_content, succeeded_docs = synthesizer.synthesize(docs_to_process, existing_wiki, domain)
+        existing_wiki = self._load_existing_wiki(context.reference_files, domain, wiki_output_dir)
+        wiki_content, succeeded_docs = synthesizer.synthesize(docs_to_process, existing_wiki, domain, cache_dir=context.output_dir)
 
         # 4. Save (DB tracking deferred to engine after keep/converged verdict)
+        # Domain lock: only write {domain}.md, never touch other domain files
         context.output_dir.mkdir(parents=True, exist_ok=True)
-        out_path = context.output_dir / f"{domain}.md"
+        allowed_filename = f"{domain}.md"
+        out_path = context.output_dir / allowed_filename
+        assert out_path.name == allowed_filename, (
+            f"Domain lock violation: expected {allowed_filename}, got {out_path.name}"
+        )
         out_path.write_text(wiki_content, encoding="utf-8")
 
         return RunResult(
@@ -465,10 +484,10 @@ class WikiTask:
         updated = apply_json_diffs(nodes, diffs)
         return json_to_md(updated)
 
-    def _load_existing_wiki(self, reference_files: list[Path], domain: str) -> str | None:
+    def _load_existing_wiki(self, reference_files: list[Path], domain: str, wiki_output_dir: str | None = None) -> str | None:
         """Find and return the existing wiki note for domain.
 
-        Priority: DB output_path (latest completed run) → reference_files fallback.
+        Priority: DB output_path → reference_files → wiki_output_dir/{domain}.md.
         """
         # 1. Try DB — latest completed run's output
         try:
@@ -484,6 +503,14 @@ class WikiTask:
         for ref in reference_files:
             if ref.stem == domain and ref.suffix == ".md":
                 return ref.read_text(encoding="utf-8")
+
+        # 3. Fallback to wiki_output_dir/{domain}.md
+        if wiki_output_dir:
+            candidate = Path(wiki_output_dir) / f"{domain}.md"
+            if candidate.exists():
+                logger.info("Loading existing wiki from wiki_output_dir: %s", candidate)
+                return candidate.read_text(encoding="utf-8")
+
         return None
 
     def _build_wiki_index(self, reference_files: list[Path]) -> str:
