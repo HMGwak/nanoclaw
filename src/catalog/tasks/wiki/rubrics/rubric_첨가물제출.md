@@ -1,18 +1,33 @@
-# Rubric: Wiki Automation
+# Rubric: Wiki Automation (v2 — Fidelity-Centered)
 
 ## 설정
-- keep_threshold: 85
-- discard_threshold: 70
-- max_iterations: 3
-- convergence_delta: 3
+- keep_threshold: 80
+- discard_threshold: 60
+- max_iterations: 4
+- convergence_delta: 1
 
 ## 평가 항목
 
-### Footnote Ratio
+### Fact Completeness
+- **타입**: 정성
+- **배점**: 35
+- **하드 게이트**: 없음
+- **설명**: Evaluate whether key facts from raw documents are fully and accurately reflected in the wiki. Assess both breadth (recall) and critical omissions.
+
+#### 채점 앵커
+| Score | Criteria | Example |
+|-------|----------|---------|
+| 0–7 | Most key facts missing or severely distorted | Only 2 out of 10+ extractable key facts reflected |
+| 8–14 | Some key facts reflected, significant omissions remain | 30–50% coverage, 1+ critical decision omitted |
+| 15–21 | Most key facts reflected, minor detail gaps | 50–70% coverage, date/number details missing |
+| 22–28 | Key facts faithfully reflected, only trivial omissions | 70–90% coverage, no critical omissions |
+| 29–35 | Key + supporting facts fully reflected | 90%+ coverage, all key facts accurately captured |
+
+### Citation Accuracy
 - **타입**: 정량
-- **배점**: 25
+- **배점**: 20
 - **하드 게이트**: 0.8
-- **설명**: wiki note 본문의 서술 문장 중 raw 출처 각주([^...])가 달린 비율
+- **설명**: Ratio of factual sentences with proper footnote citations ([^...]) referencing the source raw document. Citations must point to the correct source.
 
 #### 측정 방법
 ```python
@@ -21,121 +36,55 @@ def measure(output_files, reference_files):
     for f in output_files:
         text = f.read_text()
         sentences = [s.strip() for s in re.split(r'[.?!]\s', text) if s.strip()]
-        # 헤딩, 빈줄, YAML frontmatter 제외
         sentences = [s for s in sentences if not s.startswith('#') and not s.startswith('---')]
         if not sentences:
-            return {"value": 0.0, "detail": "서술 문장 없음"}
+            return {"value": 0.0, "detail": "No factual sentences found"}
         cited = sum(1 for s in sentences if re.search(r'\[\^[^\]]+\]', s))
         ratio = cited / len(sentences)
-        return {"value": round(ratio, 3), "detail": f"{cited}/{len(sentences)} 문장에 각주"}
+        return {"value": round(ratio, 3), "detail": f"{cited}/{len(sentences)} sentences cited"}
 ```
 
-### Country Sections
-- **타입**: 정량
-- **배점**: 0
-- **하드 게이트**: 3
-- **설명**: wiki note의 마크다운 헤딩 중 국가명을 포함하는 섹션 수
-
-#### 측정 방법
-```python
-import re
-COUNTRIES = ["한국", "미국", "일본", "중국", "EU", "영국", "독일", "프랑스", "캐나다", "호주"]
-def measure(output_files, reference_files):
-    for f in output_files:
-        text = f.read_text()
-        headings = re.findall(r'^#{1,3}\s+(.+)$', text, re.MULTILINE)
-        count = sum(1 for h in headings if any(c in h for c in COUNTRIES))
-        return {"value": count, "detail": f"국가 섹션 {count}개"}
-```
-
-### Example Count
-- **타입**: 정량
-- **배점**: 0
-- **하드 게이트**: 3
-- **설명**: wiki note 내 대표 사례/예시 블록 수
-
-#### 측정 방법
-```python
-import re
-def measure(output_files, reference_files):
-    for f in output_files:
-        text = f.read_text()
-        keywords = ["사례", "case", "예시", "example", "예:"]
-        count = sum(len(re.findall(rf'(?i)\b{kw}\b', text)) for kw in keywords)
-        return {"value": count, "detail": f"사례 키워드 {count}건"}
-```
-
-### Coverage
+### Structural Readability
 - **타입**: 정성
 - **배점**: 25
 - **하드 게이트**: 없음
-- **설명**: wiki note가 해당 주제의 핵심 측면을 얼마나 포괄하는지
+- **설명**: Evaluate whether a new team member can locate desired information within 30 seconds. Assess information hierarchy (headings, bullet points, tables), scannability, and visual structure.
 
 #### 채점 앵커
-| 점수 구간 | 기준 | 판정 예시 |
-|-----------|------|----------|
-| 0–5 | 주제의 한 측면만 언급. 핵심 개념 대부분 누락 | raw에서 토픽 10개 추출 가능한데 1~2개만 다룸 |
-| 6–10 | 2~3개 측면을 다루나 주요 하위 주제 누락 | 커버 비율 20~40% |
-| 11–15 | 핵심 하위 주제 대부분 존재, 깊이 불균일 | 커버 비율 40~60%. 일부 섹션이 1줄짜리 |
-| 16–20 | 모든 핵심 하위 주제, 깊이 균일 | 커버 비율 60~80%. 각 섹션 2문단+ |
-| 21–25 | 핵심 + 엣지 케이스까지 포괄 | 커버 비율 80%+. family note 간 중복 없이 보완적 |
+| Score | Criteria | Example |
+|-------|----------|---------|
+| 0–5 | No structure, wall of text | No headings, prose-only content |
+| 6–10 | Basic headings present but hierarchy unclear | Headings exist but content misplaced across sections |
+| 11–15 | Hierarchy present with bullet points, some inconsistency | Mostly structured but some sections remain as prose |
+| 16–20 | Consistent hierarchy, active use of tables/bullets | All sections scannable, information easy to locate |
+| 21–25 | Perfect information layering with checklists/tables | Target info reachable in 30 seconds, visually excellent |
 
-### Grounding Accuracy
-- **타입**: 정성
-- **배점**: 25
-- **하드 게이트**: 없음
-- **설명**: 각주가 가리키는 raw 문서와 wiki note의 주장이 실제로 일치하는지
-
-#### 채점 앵커
-| 점수 구간 | 기준 | 판정 예시 |
-|-----------|------|----------|
-| 0–5 | 각주가 있으나 내용 불일치 다수 | 인용한 raw와 wiki 주장이 다른 경우 3건+ |
-| 6–10 | 주요 주장은 일치하나 세부 수치/날짜 불일치 | 날짜나 금액이 다른 경우 존재 |
-| 11–15 | 대부분 일치하나 1~2건 미묘한 차이 | 맥락 미세 왜곡 |
-| 16–20 | 모든 핵심 주장이 raw와 정확히 일치 | 불일치 없음 |
-| 21–25 | 정확한 일치 + raw의 뉘앙스까지 보존 | 조건부 진술의 조건까지 충실히 반영 |
-
-### Discrimination
+### Restraint
 - **타입**: 정성
 - **배점**: 10
 - **하드 게이트**: 없음
-- **설명**: 동일 family 내 다른 wiki note와의 의미적 중복이 없는지
+- **설명**: Evaluate whether the wiki strictly stays within raw document content. No hallucination, excessive inference, or filler text that reduces information density.
 
 #### 채점 앵커
-| 점수 구간 | 기준 | 판정 예시 |
-|-----------|------|----------|
-| 0–2 | 내용 50%+ 중복 | family note와 핵심 섹션이 거의 동일 |
-| 3–4 | 중복 20~50% | 도입부와 일부 절차가 겹침 |
-| 5–6 | 중복 10~20% | 배경 설명만 겹침 |
-| 7–8 | 중복 < 10% | 각 note 고유 영역 명확 |
-| 9–10 | 중복 없음 | 상호 참조 적절, 독립적 완결 |
+| Score | Criteria | Example |
+|-------|----------|---------|
+| 0–2 | 3+ unsupported claims from raw | Multiple baseless generalizations |
+| 3–4 | 1–2 unsupported claims | One excessive generalization |
+| 5–6 | Minor extrapolation, explicitly marked | Uses "presumably" or "estimated" phrasing |
+| 7–8 | Only raw-based content | Clear distinction when inference is made |
+| 9–10 | Strictly raw content only, high density | No uncertain content, no unnecessary filler |
 
 ### Actionability
 - **타입**: 정성
 - **배점**: 10
 - **하드 게이트**: 없음
-- **설명**: 신규 담당자가 wiki note만으로 업무를 수행할 수 있는지
+- **설명**: Evaluate whether a new team member can perform the task using only this wiki note. Clear procedures, required documents, deadlines, and exception handling.
 
 #### 채점 앵커
-| 점수 구간 | 기준 | 판정 예시 |
-|-----------|------|----------|
-| 0–2 | 추상적 설명만, 절차 없음 | "서류를 준비한다" — 목록/양식/기한 없음 |
-| 3–4 | 일부 절차 있으나 실행 불가 | 서류 목록은 있으나 작성법 누락 |
-| 5–6 | 주요 절차 있으나 예외 미흡 | 정상 케이스만, 반려 시 대응 없음 |
-| 7–8 | 절차·기준·분기 대부분 갖춤 | 정상+예외, 기한, 담당 부서 명시 |
-| 9–10 | 완전한 가이드 | 신규 담당자 즉시 수행 가능, FAQ 포함 |
-
-### Restraint
-- **타입**: 정성
-- **배점**: 5
-- **하드 게이트**: 없음
-- **설명**: raw에 없는 내용(hallucination, 과도한 추론)이 억제되었는지
-
-#### 채점 앵커
-| 점수 구간 | 기준 | 판정 예시 |
-|-----------|------|----------|
-| 0–1 | raw에 없는 주장 3건+ | 근거 없는 일반화 다수 |
-| 2 | raw에 없는 주장 1~2건 | 과도한 일반화 1건 |
-| 3 | 범위 약간 넘는 추론이 있으나 명시됨 | "~로 추정된다" 표현 사용 |
-| 4 | raw 기반만 존재 | 추론 시 명시적 구분 |
-| 5 | 엄격하게 raw 내용만 | 불확실한 내용 없음 |
+| Score | Criteria | Example |
+|-------|----------|---------|
+| 0–2 | Abstract description only, no procedures | "Prepare documents" — no list, form, or deadline |
+| 3–4 | Some procedures but not executable | Document list exists but how-to is missing |
+| 5–6 | Main procedures present, exceptions lacking | Normal case only, no rejection/error handling |
+| 7–8 | Procedures, criteria, and branching mostly covered | Normal + exception, deadlines, responsible teams noted |
+| 9–10 | Complete guide | New member can execute immediately, checklist included |
