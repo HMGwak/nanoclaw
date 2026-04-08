@@ -739,7 +739,8 @@ function parseQualityLoopConfig(
       const match =
         files.find((f) => f.includes(domain) && f.endsWith('.md')) ||
         files.find(
-          (f) => f.replace(/\s+/g, '').includes(normalized) && f.endsWith('.md'),
+          (f) =>
+            f.replace(/\s+/g, '').includes(normalized) && f.endsWith('.md'),
         );
       if (match) rubricPath = path.join(rubricsDir, match);
     } catch {

@@ -1047,7 +1047,12 @@ async function main(): Promise<void> {
         'karpathy-loop',
         'engine.py',
       );
-      const linuxVenvPython = path.join(process.cwd(), '.venv-linux', 'bin', 'python');
+      const linuxVenvPython = path.join(
+        process.cwd(),
+        '.venv-linux',
+        'bin',
+        'python',
+      );
       const pythonBin =
         process.env.QUALITY_LOOP_PYTHON ||
         (fs.existsSync(linuxVenvPython)
