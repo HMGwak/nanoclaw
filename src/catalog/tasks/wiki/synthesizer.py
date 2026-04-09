@@ -462,9 +462,10 @@ class ChunkedSynthesizer:
         # 임시 파일 삭제
         doc_list_file.unlink(missing_ok=True)
         if self._vault_root:
-            codex_tmp = self._vault_root / ".codex_tmp"
-            if codex_tmp.exists() and not any(codex_tmp.iterdir()):
-                codex_tmp.rmdir()
+            try:
+                (self._vault_root / ".codex_tmp").rmdir()
+            except OSError:
+                pass  # not empty or already removed
 
         elapsed = time.time() - start
         logger.info("Codex MAP 완료: %.1fs (ok=%s)", elapsed, result["ok"])
@@ -496,7 +497,7 @@ class ChunkedSynthesizer:
         # 문서별 처리 로그 수집 (per-doc JSON files → merged log)
         if doc_log_dir.exists() and cache_dir:
             doc_log_entries = []
-            for log_file in sorted(doc_log_dir.glob("*.json")):
+            for log_file in doc_log_dir.glob("*.json"):
                 try:
                     entry = json.loads(log_file.read_text(encoding="utf-8"))
                     doc_log_entries.append(entry)
@@ -517,7 +518,6 @@ class ChunkedSynthesizer:
         if not claims:
             logger.error("Codex MAP produced 0 claims from %d docs", len(docs))
             return []
-
 
         # 캐시 저장
         if cache_file:

@@ -591,11 +591,10 @@ export async function executeTool(
         : rawVaultRoot;
 
       const toHostPath = (p: string): string => {
-        if (p.startsWith('/workspace/extra/vault/')) {
-          return path.join(vaultRoot, p.slice('/workspace/extra/vault/'.length));
-        }
-        if (p.startsWith('/workspace/extra/obsidian-vault/')) {
-          return path.join(vaultRoot, p.slice('/workspace/extra/obsidian-vault/'.length));
+        for (const prefix of CONTAINER_VAULT_PREFIXES) {
+          if (p.startsWith(prefix + '/')) {
+            return path.join(vaultRoot, p.slice(prefix.length + 1));
+          }
         }
         if (p.startsWith('/workspace/project/')) {
           return p.slice('/workspace/project/'.length);
