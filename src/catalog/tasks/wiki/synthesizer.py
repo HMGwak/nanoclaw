@@ -175,7 +175,10 @@ Rules:
 - Do NOT use comma-chain sentences with 5+ items. If many items exist, group them into 2-4 labeled categories with one item per bullet.
 - Use bullets for procedures/checklists/decision branches, not for dumping all extracted items.
 - Do NOT use markdown tables (| |). Use grouped bullet lists instead.
-- Use indented sub-items (tab + -) for hierarchical details.
+- Use indented sub-items with 4-space indent (NOT tab). Obsidian requires 4-space indentation for nested lists. Example:
+  - Level 0: `- item`
+  - Level 1: `    - sub-item` (4 spaces)
+  - Level 2: `        - sub-sub-item` (8 spaces)
 - For country/region sections, keep depth balanced. Include comparable sub-items (절차/필수 서류/주요 사례). If evidence is sparse, add one bullet stating the limitation with citation.
 """
 

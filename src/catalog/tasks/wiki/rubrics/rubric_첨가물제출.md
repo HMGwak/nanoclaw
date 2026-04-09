@@ -59,6 +59,48 @@ def measure(output_files, reference_files):
 | 16–20 | Consistent hierarchy, active use of tables/bullets | All sections scannable, information easy to locate |
 | 21–25 | Perfect information layering with checklists/tables | Target info reachable in 30 seconds, visually excellent |
 
+### Markdown Formatting
+- **타입**: 정량
+- **배점**: 5
+- **하드 게이트**: 없음
+- **설명**: Obsidian 호환 마크다운 형식 준수 여부. 인덴트는 4칸(스페이스), 리스트/넘버링/불렛 올바른 형식.
+
+#### 측정 방법
+```python
+import re
+def measure(output_files, reference_files):
+    for f in output_files:
+        text = f.read_text()
+        lines = text.splitlines()
+        issues = []
+        for i, line in enumerate(lines, 1):
+            stripped = line.lstrip()
+            if not stripped.startswith(('-', '*', '+')) and not re.match(r'\d+\.', stripped):
+                continue
+            indent = len(line) - len(stripped)
+            # 인덴트가 있으면 4의 배수여야 함 (Obsidian 기준)
+            if indent > 0 and indent % 4 != 0:
+                issues.append(f"L{i}: indent {indent} (not multiple of 4)")
+            # 탭 사용 감지
+            if '\t' in line:
+                issues.append(f"L{i}: tab character found")
+            # 불렛 뒤 공백 누락
+            if re.match(r'^(\s*[-*+])\S', line):
+                issues.append(f"L{i}: no space after bullet")
+            # 넘버링 뒤 공백 누락
+            if re.match(r'^(\s*\d+\.)\S', line):
+                issues.append(f"L{i}: no space after number")
+        total_list_lines = sum(1 for l in lines if l.lstrip().startswith(('-','*','+')) or re.match(r'\s*\d+\.', l))
+        if total_list_lines == 0:
+            return {"value": 1.0, "detail": "리스트 항목 없음"}
+        error_rate = len(issues) / total_list_lines
+        score = max(0, 1.0 - error_rate)
+        detail = f"{len(issues)} issues / {total_list_lines} list lines"
+        if issues:
+            detail += f" (첫 3개: {'; '.join(issues[:3])})"
+        return {"value": round(score, 3), "detail": detail}
+```
+
 ### Restraint
 - **타입**: 정성
 - **배점**: 10
