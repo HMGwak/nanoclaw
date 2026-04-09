@@ -116,7 +116,7 @@ def run_codex_prompt(
     cwd: str | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
-    timeout_s: float = 600.0,
+    timeout_s: float = 3600.0,
     output_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute a prompt via Codex SDK and return structured result.

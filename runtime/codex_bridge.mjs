@@ -113,7 +113,7 @@ async function probeExec() {
     typeof input.reasoning_effort === "string" && input.reasoning_effort.trim()
       ? input.reasoning_effort.trim()
       : undefined;
-  const timeoutMs = Number.isFinite(input.timeout_ms) ? Number(input.timeout_ms) : 300000;
+  const timeoutMs = Number.isFinite(input.timeout_ms) ? Number(input.timeout_ms) : 3600000;
   const outputSchema =
     input.output_schema && typeof input.output_schema === "object" && !Array.isArray(input.output_schema)
       ? input.output_schema

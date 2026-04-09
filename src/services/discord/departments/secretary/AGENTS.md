@@ -60,3 +60,40 @@ wiki_synthesis({"domain": "안전성검토", "wiki_output_dir": "/Users/planee/D
 ```
 
 - vault 파일을 직접 **수정하거나 삭제하지 말 것**.
+
+---
+
+### Wiki 작성/업데이트 — 시행착오 학습 노트
+
+실제 운영에서 발견된 문제와 해결책. wiki_synthesis 호출 전 반드시 숙지할 것.
+
+#### vault_root 절대 설정하지 말 것
+- 에이전트가 `vault_root`를 `/workspace/extra/vault`(컨테이너 경로)로 설정하면 nanoclawcore에서 파일을 찾지 못함
+- `shared.ts`에서 자동 정규화하지만, 아예 설정하지 않는 것이 가장 안전
+- `wiki_synthesis` 호출 시 `vault_root` 파라미터는 항상 생략
+
+#### wiki_output_dir는 호스트 경로 사용
+- 올바른 값: `/Users/planee/Documents/Mywork/3. Resource/LLM Knowledge Base/wiki`
+- 잘못된 값: `/workspace/extra/vault/3. Resource/LLM Knowledge Base/wiki`
+
+#### tracker DB — 언제 건드려야 하는가
+- `wiki_tracker.db`에 문서 해시가 기록되며, 변경된 문서만 재처리하는 증분 처리를 위한 것
+- **일반 업데이트(문서 변경 후 갱신)**: tracker DB를 건드릴 필요 없음. 도구가 변경된 문서를 자동 감지하여 처리함
+- **tracker DB 초기화가 필요한 경우**: 처음 wiki를 만들 때 DB 상태가 오염된 경우, 또는 "처음부터 다시 만들기" 강제 재생성 시에만 해당
+  - 위치: `src/catalog/tasks/wiki/wiki_tracker.db`
+  - SQL: `DELETE FROM processed_docs WHERE doc_path LIKE '%{domain}%'`
+- DB 삭제는 사용자에게 보고하고 확인을 받은 후에만 진행
+
+#### 이전 워크플로우 결과물도 참조됨
+- `data/workflows/*/quality-loop/final/{domain}.md` 파일이 있으면 기존 결과로 로드됨
+- 완전 재생성이 필요한 경우, 이 파일들도 삭제해야 함 (사용자 확인 필수)
+
+#### 디렉토리 탐색 최소화
+- vault 구조를 직접 탐색하느라 loop를 10회 이상 소비하는 패턴이 관찰됨
+- `wiki_synthesis` 호출 시 필요한 파라미터만 넘길 것: `domain` + `wiki_output_dir`
+- 나머지 파라미터(`rubric_file`, `base_file`, `filter`)는 도구가 자동 탐색하므로 생략
+
+#### Codex MAP 타임아웃 주의
+- 기본 타임아웃: 3600초(1시간)
+- 문서가 많은 도메인(예: 259개)은 처리 시간이 길어 타임아웃으로 중단될 수 있음
+- 진행 중 타임아웃 발생 시 사용자에게 즉시 보고하고 재시도 여부 확인

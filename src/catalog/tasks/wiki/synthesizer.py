@@ -441,7 +441,6 @@ class ChunkedSynthesizer:
             cwd=str(self._vault_root) if self._vault_root else str(Path.cwd()),
             reasoning_effort="high",
             output_schema=CODEX_MAP_CLAIM_SCHEMA,
-            timeout_s=600.0,
         )
 
         # 임시 파일 삭제
