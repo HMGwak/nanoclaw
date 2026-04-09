@@ -404,15 +404,26 @@ class ChunkedSynthesizer:
                 except Exception:
                     pass
 
-        # Codex MAP 프롬프트 생성
-        doc_listing = "\n".join(f"- {p}" for p in docs)
+        # 문서 경로 목록을 파일로 저장 (프롬프트 크기를 문서 수와 무관하게 유지)
+        doc_list_file = (cache_dir / "_codex_doc_list.md") if cache_dir else Path("/tmp/_codex_doc_list.md")
+        doc_list_file.parent.mkdir(parents=True, exist_ok=True)
+        relative_paths: list[str] = []
+        for p in docs:
+            try:
+                relative_paths.append(str(p.relative_to(self._vault_root)) if self._vault_root else str(p))
+            except ValueError:
+                relative_paths.append(str(p))
+        doc_list_file.write_text("\n".join(relative_paths), encoding="utf-8")
+
         prompt = CODEX_MAP_PROMPT_TEMPLATE.format(
             doc_count=len(docs),
-            doc_listing=doc_listing,
+            doc_listing=f"문서 경로 목록은 아래 파일에 한 줄에 하나씩 저장되어 있습니다. cat으로 읽으세요:\n{doc_list_file.resolve()}",
         )
 
-        logger.info("Codex MAP: %d docs 전송 (cwd=%s)...", len(docs),
-                     str(self._vault_root) if self._vault_root else "project")
+        logger.info("Codex MAP: %d docs 전송 (cwd=%s, doc_list=%s)...",
+                     len(docs),
+                     str(self._vault_root) if self._vault_root else "project",
+                     doc_list_file)
         start = time.time()
 
         result = run_codex_prompt(
@@ -422,6 +433,9 @@ class ChunkedSynthesizer:
             output_schema=CODEX_MAP_CLAIM_SCHEMA,
             timeout_s=600.0,
         )
+
+        # 임시 파일 삭제
+        doc_list_file.unlink(missing_ok=True)
 
         elapsed = time.time() - start
         logger.info("Codex MAP 완료: %.1fs (ok=%s)", elapsed, result["ok"])
