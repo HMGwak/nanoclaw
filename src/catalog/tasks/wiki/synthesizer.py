@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
 import time
 from pathlib import Path
 
@@ -107,6 +108,7 @@ CODEX_MAP_CLAIM_SCHEMA = {
             "required": ["반복_입력자료", "반복_산출물", "절차_단계"],
         },
     },
+    },
     "required": ["claims", "patterns"],
 }
 
@@ -125,6 +127,13 @@ CODEX_MAP_PROMPT_TEMPLATE = """\
 5. 중복되는 claim은 병합하고 doc_id 목록을 통합하세요
 6. 반복 패턴 (입력자료, 산출물, 절차 단계)을 정리하세요
 7. 모든 문서 처리 후 최종 JSON을 반환하세요
+
+문서별 처리 로그:
+- 각 문서를 읽은 후 아래 디렉토리에 문서명과 동일한 JSON 파일을 생성하세요:
+  {doc_log_dir}
+- 형식: {{"doc":"파일명.md","claims":추출수,"summary":"핵심 1줄 요약"}}
+- claim이 0이면: {{"doc":"파일명.md","claims":0,"reason":"스킵 사유"}}
+- 예: echo '{{"doc":"TANN.md","claims":2,"summary":"VOC 시험 흐름"}}' > {doc_log_dir}/TANN.md.json
 
 각 claim에 반드시 포함할 필드:
 - claim: 핵심 사실 (한국어)
@@ -425,9 +434,14 @@ class ChunkedSynthesizer:
                 relative_paths.append(str(p))
         doc_list_file.write_text("\n".join(f"- [ ] {rp}" for rp in relative_paths), encoding="utf-8")
 
+        # 문서별 처리 로그 디렉토리
+        doc_log_dir = doc_list_file.parent / "_codex_map_log"
+        doc_log_dir.mkdir(parents=True, exist_ok=True)
+
         prompt = CODEX_MAP_PROMPT_TEMPLATE.format(
             doc_count=len(docs),
             doc_listing=f"문서 경로 목록은 아래 파일에 한 줄에 하나씩 저장되어 있습니다. cat으로 읽으세요:\n{doc_list_file.resolve()}",
+            doc_log_dir=str(doc_log_dir.resolve()),
         )
 
         logger.info("Codex MAP: %d docs 전송 (cwd=%s, doc_list=%s)...",
@@ -476,6 +490,27 @@ class ChunkedSynthesizer:
         logger.info("Codex MAP: %d claims, patterns: %s",
                      len(claims),
                      {k: len(v) for k, v in claims_data.get("patterns", {}).items()})
+
+        # 문서별 처리 로그 수집 (per-doc JSON files → merged log)
+        if doc_log_dir.exists() and cache_dir:
+            doc_log_entries = []
+            for log_file in sorted(doc_log_dir.glob("*.json")):
+                try:
+                    entry = json.loads(log_file.read_text(encoding="utf-8"))
+                    doc_log_entries.append(entry)
+                except (json.JSONDecodeError, OSError):
+                    doc_log_entries.append({"doc": log_file.stem, "claims": -1, "reason": "log parse error"})
+            if doc_log_entries:
+                doc_log_dest = cache_dir / "codex_map_doc_log.json"
+                doc_log_dest.write_text(
+                    json.dumps(doc_log_entries, ensure_ascii=False, indent=2), encoding="utf-8")
+                skipped = sum(1 for d in doc_log_entries if d.get("claims", 0) == 0)
+                logger.info("Codex MAP doc log: %d entries (%d with claims, %d skipped) → %s",
+                            len(doc_log_entries), len(doc_log_entries) - skipped, skipped, doc_log_dest)
+            else:
+                logger.warning("Codex MAP doc log directory is empty")
+            # 로그 디렉토리 정리
+            shutil.rmtree(doc_log_dir, ignore_errors=True)
 
         if not claims:
             logger.error("Codex MAP produced 0 claims from %d docs", len(docs))
