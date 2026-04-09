@@ -13,6 +13,21 @@
 - 각 claim에 반드시 doc_id와 quote 포함
 - 중복 claim은 병합하고 doc_id 목록 통합
 
+## 파일 접근 불가 시 처리 (필수)
+- 문서를 cat으로 읽을 때 permission denied, bwrap 오류, 또는 빈 내용이 반환되면 **즉시 중단**하라.
+- 읽지 못한 문서로 claim을 추출하려 시도하지 마라.
+- 파일을 읽지 못한 경우 아래 JSON을 반환하라:
+```json
+{
+  "error": "FILE_ACCESS_DENIED",
+  "message": "문서 파일에 접근할 수 없습니다. sandbox 권한 또는 경로를 확인하세요.",
+  "failed_files": ["파일명1.md", "파일명2.md"],
+  "claims": [],
+  "patterns": {"반복_입력자료": [], "반복_산출물": [], "절차_단계": []}
+}
+```
+- **절대로** 접근 불가 상태를 claim이나 wiki 내용으로 작성하지 마라. 그것은 wiki가 아니라 오류 보고서다.
+
 ## 출력 스키마
 ```json
 {

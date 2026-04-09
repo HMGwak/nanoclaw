@@ -136,6 +136,11 @@ CODEX_MAP_PROMPT_TEMPLATE = """\
 - 쉼표(,)로 여러 항목을 한 문자열에 합치지 마세요.
 - 가능한 경우 성격별 라벨을 붙이세요 (예: "문서: BOM", "시스템: SAP", "시험: 연기성분").
 
+파일 접근 불가 시:
+- cat으로 문서를 읽을 때 permission denied, bwrap 오류, 빈 내용이 반환되면 즉시 중단하세요.
+- 읽지 못한 문서로 claim을 만들지 마세요.
+- 접근 불가 시 error: "FILE_ACCESS_DENIED"를 포함한 JSON을 반환하세요.
+
 원문에 없는 내용은 절대 추가하지 마세요."""
 
 
@@ -455,6 +460,14 @@ class ChunkedSynthesizer:
             batch_data = self._parse_codex_response(result.get("output", ""))
             if batch_data is None:
                 logger.warning("Codex MAP batch %d: invalid JSON response", batch_idx + 1)
+                continue
+
+            # 파일 접근 불가 에러 감지
+            if batch_data.get("error") == "FILE_ACCESS_DENIED":
+                failed = batch_data.get("failed_files", [])
+                logger.error("Codex MAP batch %d: FILE_ACCESS_DENIED — %d files inaccessible. "
+                             "Check sandbox cwd and vault path. Failed: %s",
+                             batch_idx + 1, len(failed), failed[:5])
                 continue
 
             batch_claims = batch_data.get("claims", [])
