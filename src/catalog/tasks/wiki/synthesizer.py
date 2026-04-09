@@ -108,7 +108,6 @@ CODEX_MAP_CLAIM_SCHEMA = {
             "required": ["반복_입력자료", "반복_산출물", "절차_단계"],
         },
     },
-    },
     "required": ["claims", "patterns"],
 }
 
