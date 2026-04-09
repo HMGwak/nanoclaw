@@ -495,6 +495,16 @@ class ChunkedSynthesizer:
             logger.error("Codex MAP produced 0 claims across all batches")
             return []
 
+        # Claims 최소 기준: 문서 10개당 claim 1개 미만이면 MAP 실패로 간주
+        min_claims = max(1, len(docs) * 0.1)
+        if len(all_claims) < min_claims:
+            logger.error(
+                "Codex MAP produced too few claims (%d/%d docs, min=%.0f). "
+                "Likely sandbox file access issue. Aborting MAP.",
+                len(all_claims), len(docs), min_claims,
+            )
+            return []
+
         # 패턴 중복 제거
         merged_patterns = {k: list(dict.fromkeys(v)) for k, v in all_patterns.items()}
 

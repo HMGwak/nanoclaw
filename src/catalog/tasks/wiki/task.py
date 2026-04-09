@@ -387,6 +387,14 @@ class WikiTask:
         existing_wiki = self._load_existing_wiki(context.reference_files, domain, wiki_output_dir)
         wiki_content, succeeded_docs = synthesizer.synthesize(docs_to_process, existing_wiki, domain, cache_dir=context.output_dir)
 
+        # MAP 실패 시 빈 결과 → 루프가 빈 output으로 탈출하도록
+        if not wiki_content or not wiki_content.strip():
+            logger.error("Synthesis returned empty wiki for domain=%s. MAP may have failed (file access or insufficient claims).", domain)
+            return RunResult(
+                output_files=[],
+                metadata={"domain": domain, "error": "MAP_SYNTHESIS_FAILED", "docs_attempted": len(docs_to_process)},
+            )
+
         # 4. Save (DB tracking deferred to engine after keep/converged verdict)
         # Domain lock: only write {domain}.md, never touch other domain files
         context.output_dir.mkdir(parents=True, exist_ok=True)

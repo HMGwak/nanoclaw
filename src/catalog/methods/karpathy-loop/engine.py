@@ -633,7 +633,9 @@ def run_loop(
             _notify_verdict(callbacks, iteration, "keep", eval_output.total)
             break
 
-        if eval_output.total < config.discard_threshold and iteration > 1:
+        # Discard: iteration 1에서도 discard_threshold 미만이면 즉시 탈출.
+        # 첫 생성 결과가 너무 낮으면 revise로 회복 불가능 (MAP 실패, 파일 접근 불가 등).
+        if eval_output.total < config.discard_threshold:
             record.verdict = "discard"
             history.append(record)
             _notify_verdict(callbacks, iteration, "discard", eval_output.total)
