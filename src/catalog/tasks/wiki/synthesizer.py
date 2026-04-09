@@ -438,7 +438,7 @@ class ChunkedSynthesizer:
 
             result = run_codex_prompt(
                 prompt=prompt,
-                cwd=str(Path.cwd()),
+                cwd=str(self._vault_root) if self._vault_root else str(Path.cwd()),
                 reasoning_effort="high",
                 output_schema=CODEX_MAP_CLAIM_SCHEMA,
                 timeout_s=600.0,
