@@ -405,7 +405,15 @@ class ChunkedSynthesizer:
                     pass
 
         # 문서 경로 목록을 파일로 저장 (프롬프트 크기를 문서 수와 무관하게 유지)
-        doc_list_file = (cache_dir / "_codex_doc_list.md") if cache_dir else Path("/tmp/_codex_doc_list.md")
+        # sandbox cwd=vault_root이므로, doc_list 파일도 vault_root 아래에 있어야 접근 가능
+        if self._vault_root:
+            doc_list_dir = self._vault_root / ".codex_tmp"
+            doc_list_dir.mkdir(parents=True, exist_ok=True)
+            doc_list_file = doc_list_dir / "_codex_doc_list.md"
+        elif cache_dir:
+            doc_list_file = cache_dir / "_codex_doc_list.md"
+        else:
+            doc_list_file = Path("/tmp/_codex_doc_list.md")
         doc_list_file.parent.mkdir(parents=True, exist_ok=True)
         relative_paths: list[str] = []
         for p in docs:
@@ -413,7 +421,7 @@ class ChunkedSynthesizer:
                 relative_paths.append(str(p.relative_to(self._vault_root)) if self._vault_root else str(p))
             except ValueError:
                 relative_paths.append(str(p))
-        doc_list_file.write_text("\n".join(relative_paths), encoding="utf-8")
+        doc_list_file.write_text("\n".join(f"- [ ] {rp}" for rp in relative_paths), encoding="utf-8")
 
         prompt = CODEX_MAP_PROMPT_TEMPLATE.format(
             doc_count=len(docs),
@@ -436,6 +444,10 @@ class ChunkedSynthesizer:
 
         # 임시 파일 삭제
         doc_list_file.unlink(missing_ok=True)
+        if self._vault_root:
+            codex_tmp = self._vault_root / ".codex_tmp"
+            if codex_tmp.exists() and not any(codex_tmp.iterdir()):
+                codex_tmp.rmdir()
 
         elapsed = time.time() - start
         logger.info("Codex MAP 완료: %.1fs (ok=%s)", elapsed, result["ok"])
