@@ -149,7 +149,7 @@ async function probeExec() {
       ...(reasoningEffort ? { modelReasoningEffort: reasoningEffort } : {}),
       workingDirectory: cwd,
       skipGitRepoCheck: true,
-      sandboxMode: "read-only",
+      sandboxMode: process.env.CODEX_SANDBOX_MODE || "read-only",
       approvalPolicy: "never",
       networkAccessEnabled: false,
       webSearchMode: "disabled",

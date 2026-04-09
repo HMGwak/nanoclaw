@@ -54,11 +54,14 @@ def _ensure_local_home() -> None:
 def _build_local_env() -> dict[str, str]:
     """Build environment for Codex bridge.
 
-    Uses real HOME for auth access. Isolation is only needed in Docker
-    where ~/.codex is mounted read-only.
+    Uses real HOME for auth access.
+    Disables bwrap sandbox when running as subprocess (bwrap namespace
+    creation fails in Docker/subprocess contexts).
     """
     env: dict[str, str] = {k: v for k, v in os.environ.items() if v}
-    # Keep real HOME so Codex finds ~/.codex/auth.json
+    # Disable bwrap sandbox — fails with namespace permission errors
+    # when spawned from Docker or NanoClaw subprocess
+    env.setdefault("CODEX_SANDBOX_MODE", "off")
     return env
 
 
