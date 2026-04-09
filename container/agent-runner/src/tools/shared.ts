@@ -8,6 +8,7 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { loadSubAgentManager } from '../sub-agent-manager.js';
+import { normalizeVaultRoot, toHostPath, findFileByDomain } from './wiki-utils.js';
 import {
   agentBrowseOpen,
   agentBrowseClick,
@@ -582,61 +583,21 @@ export async function executeTool(
         process.env.NANOCLAW_SECRETARY_OBSIDIAN_VAULT_HOST_PATH?.trim() ||
         '/Users/planee/Documents/Mywork';
       const rawVaultRoot = a.vault_root || DEFAULT_VAULT_HOST_PATH;
-      const CONTAINER_VAULT_PREFIXES = [
-        '/workspace/extra/vault',
-        '/workspace/extra/obsidian-vault',
-      ];
-      const vaultRoot = CONTAINER_VAULT_PREFIXES.some((p) => rawVaultRoot.startsWith(p))
-        ? DEFAULT_VAULT_HOST_PATH
-        : rawVaultRoot;
+      const vaultRoot = normalizeVaultRoot(rawVaultRoot, DEFAULT_VAULT_HOST_PATH);
 
-      const toHostPath = (p: string): string => {
-        for (const prefix of CONTAINER_VAULT_PREFIXES) {
-          if (p.startsWith(prefix + '/')) {
-            return path.join(vaultRoot, p.slice(prefix.length + 1));
-          }
-        }
-        if (p.startsWith('/workspace/project/')) {
-          return p.slice('/workspace/project/'.length);
-        }
-        return p;
-      };
-
-      const findRubricFile = (): string => {
-        const rubricsDir = '/workspace/project/src/catalog/tasks/wiki/rubrics';
-        try {
-          const files = fs.readdirSync(rubricsDir);
-          const exact = files.find((f) => f.includes(a.domain) && f.endsWith('.md'));
-          if (exact) return path.join(rubricsDir, exact);
-          const normalized = a.domain.replace(/\s+/g, '');
-          const partial = files.find(
-            (f) => f.replace(/\s+/g, '').includes(normalized) && f.endsWith('.md'),
-          );
-          if (partial) return path.join(rubricsDir, partial);
-        } catch { /* ignore */ }
-        return '';
-      };
-
-      const findBaseFile = (): string => {
-        const dirs = [
+      const rubricPath = a.rubric_file || findFileByDomain(
+        ['/workspace/project/src/catalog/tasks/wiki/rubrics'],
+        '.md',
+        a.domain,
+      );
+      const basePath = a.base_file || findFileByDomain(
+        [
           '/workspace/extra/vault/3. Resource/LLM Knowledge Base/index',
           '/workspace/extra/obsidian-vault/3. Resource/LLM Knowledge Base/index',
-        ];
-        for (const dir of dirs) {
-          try {
-            const files = fs.readdirSync(dir);
-            const normalized = a.domain.replace(/\s+/g, '');
-            const match = files.find(
-              (f) => f.endsWith('.base') && f.replace(/\s+/g, '').includes(normalized),
-            );
-            if (match) return path.join(dir, match);
-          } catch { /* ignore */ }
-        }
-        return '';
-      };
-
-      const rubricPath = a.rubric_file || findRubricFile();
-      const basePath = a.base_file || findBaseFile();
+        ],
+        '.base',
+        a.domain,
+      );
 
       const qualityLoopConfig: Record<string, string> = {
         task: 'wiki_task.WikiTask',
@@ -644,8 +605,8 @@ export async function executeTool(
         vault_root: vaultRoot,
         wiki_output_dir: a.wiki_output_dir,
       };
-      if (rubricPath) qualityLoopConfig.rubric = toHostPath(rubricPath);
-      if (basePath) qualityLoopConfig.base = toHostPath(basePath);
+      if (rubricPath) qualityLoopConfig.rubric = toHostPath(rubricPath, vaultRoot);
+      if (basePath) qualityLoopConfig.base = toHostPath(basePath, vaultRoot);
       if (a.filter) qualityLoopConfig.filter = a.filter;
       if (a.model) qualityLoopConfig.model = a.model;
 

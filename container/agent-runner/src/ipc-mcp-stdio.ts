@@ -17,6 +17,7 @@ import {
   runDebateWithAgents,
   validateDebateRequest,
 } from './tools/debate-orchestration.js';
+import { normalizeVaultRoot, toHostPath, findFileByDomain } from './tools/wiki-utils.js';
 
 const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
@@ -784,58 +785,23 @@ if (canStartWorkflow) {
       },
     },
     async (args) => {
-      const vaultRoot = args.vault_root || '/Users/planee/Documents/Mywork';
+      const DEFAULT_VAULT_HOST_PATH = '/Users/planee/Documents/Mywork';
+      const rawVaultRoot = args.vault_root || DEFAULT_VAULT_HOST_PATH;
+      const vaultRoot = normalizeVaultRoot(rawVaultRoot, DEFAULT_VAULT_HOST_PATH);
 
-      // Convert container paths to host paths
-      const toHostPath = (p: string): string => {
-        if (p.startsWith('/workspace/extra/vault/')) {
-          return path.join(vaultRoot, p.slice('/workspace/extra/vault/'.length));
-        }
-        if (p.startsWith('/workspace/extra/obsidian-vault/')) {
-          return path.join(vaultRoot, p.slice('/workspace/extra/obsidian-vault/'.length));
-        }
-        if (p.startsWith('/workspace/project/')) {
-          return p.slice('/workspace/project/'.length);
-        }
-        return p;
-      };
-
-      // Auto-discover rubric file if not provided
-      const findRubricFile = (): string => {
-        const rubricsDir = '/workspace/project/src/catalog/tasks/wiki/rubrics';
-        try {
-          const files = fs.readdirSync(rubricsDir);
-          // Exact match first
-          const exact = files.find(f => f.includes(args.domain) && f.endsWith('.md'));
-          if (exact) return path.join(rubricsDir, exact);
-          // Partial match (normalize Korean)
-          const normalized = args.domain.replace(/\s+/g, '');
-          const partial = files.find(f => f.replace(/\s+/g, '').includes(normalized) && f.endsWith('.md'));
-          if (partial) return path.join(rubricsDir, partial);
-        } catch { /* ignore */ }
-        return '';
-      };
-
-      // Auto-discover base file if not provided
-      const findBaseFile = (): string => {
-        const vaultIndexDir = '/workspace/extra/vault/3. Resource/LLM Knowledge Base/index';
-        const altDir = '/workspace/extra/obsidian-vault/3. Resource/LLM Knowledge Base/index';
-        for (const dir of [vaultIndexDir, altDir]) {
-          try {
-            const files = fs.readdirSync(dir);
-            const normalized = args.domain.replace(/\s+/g, '');
-            const match = files.find(f =>
-              f.endsWith('.base') &&
-              f.replace(/\s+/g, '').includes(normalized)
-            );
-            if (match) return path.join(dir, match);
-          } catch { /* ignore */ }
-        }
-        return '';
-      };
-
-      const rubricPath = args.rubric_file || findRubricFile();
-      const basePath = args.base_file || findBaseFile();
+      const rubricPath = args.rubric_file || findFileByDomain(
+        ['/workspace/project/src/catalog/tasks/wiki/rubrics'],
+        '.md',
+        args.domain,
+      );
+      const basePath = args.base_file || findFileByDomain(
+        [
+          '/workspace/extra/vault/3. Resource/LLM Knowledge Base/index',
+          '/workspace/extra/obsidian-vault/3. Resource/LLM Knowledge Base/index',
+        ],
+        '.base',
+        args.domain,
+      );
 
       if (!rubricPath) {
         return { content: [{ type: 'text' as const, text: `Error: rubric file not found for domain "${args.domain}". Please specify rubric_file manually.` }] };
@@ -843,12 +809,12 @@ if (canStartWorkflow) {
 
       const qualityLoopConfig: Record<string, string> = {
         task: 'wiki_task.WikiTask',
-        rubric: toHostPath(rubricPath),
+        rubric: toHostPath(rubricPath, vaultRoot),
         domain: args.domain,
         vault_root: vaultRoot,
         wiki_output_dir: args.wiki_output_dir,
       };
-      if (basePath) qualityLoopConfig.base = toHostPath(basePath);
+      if (basePath) qualityLoopConfig.base = toHostPath(basePath, vaultRoot);
       if (args.filter) qualityLoopConfig.filter = args.filter;
       if (args.model) qualityLoopConfig.model = args.model;
 

@@ -8,6 +8,23 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const CODE = {
+  RUNTIME_OK: "RUNTIME_OK",
+  RUNTIME_NOT_FOUND: "RUNTIME_NOT_FOUND",
+  SDK_NOT_FOUND: "SDK_NOT_FOUND",
+  EXEC_OK: "EXEC_OK",
+  EXEC_FAILED: "EXEC_FAILED",
+  INVALID_INPUT: "INVALID_INPUT",
+  TIMEOUT: "TIMEOUT",
+  AUTH_REQUIRED: "AUTH_REQUIRED",
+  INVALID_ARGS: "INVALID_ARGS",
+  INTERNAL_ERROR: "INTERNAL_ERROR",
+};
+
+function makeResponse(probe, ok, code, message, details = {}) {
+  return { schema_version: "1", probe, ok, code, message, details };
+}
+
 function argValue(name) {
   const args = process.argv.slice(2);
   const index = args.indexOf(name);
@@ -86,16 +103,16 @@ async function probeRuntime() {
   try {
     command = codexPath();
   } catch (error) {
-    return { schema_version: "1", probe: "runtime", ok: false, code: "RUNTIME_NOT_FOUND", message: String(error), details: {} };
+    return makeResponse("runtime", false, CODE.RUNTIME_NOT_FOUND, String(error));
   }
 
   try {
     await loadCodexSdkCtor();
   } catch (error) {
-    return { schema_version: "1", probe: "runtime", ok: false, code: "SDK_NOT_FOUND", message: String(error), details: { codex_path: command } };
+    return makeResponse("runtime", false, CODE.SDK_NOT_FOUND, String(error), { codex_path: command });
   }
 
-  return { schema_version: "1", probe: "runtime", ok: true, code: "RUNTIME_OK", message: "Codex runtime ready", details: { codex_path: command } };
+  return makeResponse("runtime", true, CODE.RUNTIME_OK, "Codex runtime ready", { codex_path: command });
 }
 
 async function probeExec() {
@@ -103,7 +120,7 @@ async function probeExec() {
   try {
     input = await readJsonStdin();
   } catch {
-    return { schema_version: "1", probe: "exec", ok: false, code: "INVALID_INPUT", message: "stdin must be valid json", details: {} };
+    return makeResponse("exec", false, CODE.INVALID_INPUT, "stdin must be valid json");
   }
 
   const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
@@ -120,7 +137,7 @@ async function probeExec() {
       : undefined;
 
   if (!prompt) {
-    return { schema_version: "1", probe: "exec", ok: false, code: "INVALID_INPUT", message: "prompt is required", details: {} };
+    return makeResponse("exec", false, CODE.INVALID_INPUT, "prompt is required");
   }
 
   const { spawn } = await import("node:child_process");
@@ -132,7 +149,7 @@ async function probeExec() {
   try {
     tmpDir = mkdtempSync(join(tmpdir(), "codex-bridge-"));
   } catch (e) {
-    return { schema_version: "1", probe: "exec", ok: false, code: "EXEC_FAILED", message: `Failed to create temp dir: ${e}`, details: {} };
+    return makeResponse("exec", false, CODE.EXEC_FAILED, `Failed to create temp dir: ${e}`);
   }
 
   const outputFile = join(tmpDir, "output.txt");
@@ -189,16 +206,16 @@ async function probeExec() {
     });
 
     if (result.timedOut) {
-      return { schema_version: "1", probe: "exec", ok: false, code: "TIMEOUT", message: "command timeout", details: {} };
+      return makeResponse("exec", false, CODE.TIMEOUT, "command timeout");
     }
 
     const stderrLower = (result.stderr || "").toLowerCase();
     if (stderrLower.includes("not logged in") || stderrLower.includes("login required") || stderrLower.includes("authentication")) {
-      return { schema_version: "1", probe: "exec", ok: false, code: "AUTH_REQUIRED", message: "Codex login required", details: { error: result.stderr } };
+      return makeResponse("exec", false, CODE.AUTH_REQUIRED, "Codex login required", { error: result.stderr });
     }
 
     if (result.exitCode !== 0) {
-      return { schema_version: "1", probe: "exec", ok: false, code: "EXEC_FAILED", message: result.stderr || `Exit code ${result.exitCode}`, details: { exit_code: result.exitCode, stderr: result.stderr } };
+      return makeResponse("exec", false, CODE.EXEC_FAILED, result.stderr || `Exit code ${result.exitCode}`, { exit_code: result.exitCode, stderr: result.stderr });
     }
 
     let finalResponse = "";
@@ -208,17 +225,10 @@ async function probeExec() {
       // output file might not exist if agent produced no output
     }
 
-    return {
-      schema_version: "1",
-      probe: "exec",
-      ok: true,
-      code: "EXEC_OK",
-      message: "ok",
-      details: {
-        final_response: finalResponse,
-        codex_path: localCodexCliPath,
-      },
-    };
+    return makeResponse("exec", true, CODE.EXEC_OK, "ok", {
+      final_response: finalResponse,
+      codex_path: localCodexCliPath,
+    });
   } finally {
     try { unlinkSync(outputFile); } catch {}
     if (schemaFile) { try { unlinkSync(schemaFile); } catch {} }
@@ -235,7 +245,7 @@ async function main() {
   } else if (probe === "exec") {
     payload = await probeExec();
   } else {
-    payload = { schema_version: "1", probe: "unknown", ok: false, code: "INVALID_ARGS", message: "use --probe runtime|exec --json", details: {} };
+    payload = makeResponse("unknown", false, CODE.INVALID_ARGS, "use --probe runtime|exec --json");
   }
 
   if (hasArg("--json")) {
@@ -248,6 +258,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  printJson({ schema_version: "1", probe: "internal", ok: false, code: "INTERNAL_ERROR", message: String(error), details: {} });
+  printJson(makeResponse("internal", false, CODE.INTERNAL_ERROR, String(error)));
   process.exit(1);
 });
