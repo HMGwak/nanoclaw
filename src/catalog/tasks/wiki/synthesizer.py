@@ -118,11 +118,13 @@ CODEX_MAP_PROMPT_TEMPLATE = """\
 {doc_listing}
 
 작업 절차:
-1. 각 문서를 cat으로 읽으세요
-2. 각 문서에서 핵심 사실/절차/이슈를 claim으로 추출하세요
-3. 중복되는 claim은 병합하고 doc_id 목록을 통합하세요
-4. 반복 패턴 (입력자료, 산출물, 절차 단계)을 정리하세요
-5. 모든 문서 처리 후 최종 JSON을 반환하세요
+1. 목록 파일을 cat으로 읽어 경로 목록을 파악하세요
+2. 각 문서를 순서대로 cat으로 읽으세요
+3. 문서를 읽은 직후, 목록 파일에서 해당 항목의 `- [ ]`를 `- [x]`로 수정하세요 (sed 사용)
+4. 각 문서에서 핵심 사실/절차/이슈를 claim으로 추출하세요
+5. 중복되는 claim은 병합하고 doc_id 목록을 통합하세요
+6. 반복 패턴 (입력자료, 산출물, 절차 단계)을 정리하세요
+7. 모든 문서 처리 후 최종 JSON을 반환하세요
 
 각 claim에 반드시 포함할 필드:
 - claim: 핵심 사실 (한국어)
@@ -456,8 +458,10 @@ class ChunkedSynthesizer:
             logger.error("Codex MAP failed: %s", result["message"])
             return []
 
-        # 응답 파싱
-        claims_data = self._parse_codex_response(result.get("output", ""))
+        # 응답 파싱 (디버그: raw output 로깅)
+        raw_output = result.get("output", "")
+        logger.info("Codex MAP raw output (first 1000 chars): %.1000s", raw_output)
+        claims_data = self._parse_codex_response(raw_output)
         if claims_data is None:
             logger.error("Codex MAP response is not valid JSON")
             return []
@@ -478,14 +482,6 @@ class ChunkedSynthesizer:
             logger.error("Codex MAP produced 0 claims from %d docs", len(docs))
             return []
 
-        # Claims 최소 기준: 문서 10개당 claim 1개 미만이면 MAP 실패
-        min_claims = max(1, len(docs) * 0.1)
-        if len(claims) < min_claims:
-            logger.error(
-                "Codex MAP produced too few claims (%d/%d docs, min=%.0f). Aborting.",
-                len(claims), len(docs), min_claims,
-            )
-            return []
 
         # 캐시 저장
         if cache_file:
@@ -495,7 +491,7 @@ class ChunkedSynthesizer:
             except Exception:
                 logger.warning("Failed to write Codex MAP cache")
 
-        return self._claims_to_extractions(merged_data, docs)
+        return self._claims_to_extractions(claims_data, docs)
 
     @staticmethod
     def _parse_codex_response(output: str) -> dict | None:

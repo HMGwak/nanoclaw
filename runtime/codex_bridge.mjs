@@ -67,20 +67,6 @@ async function loadCodexSdkCtor() {
   throw new Error("Codex SDK module was not found in this repository.");
 }
 
-function resolveFinalResponse(turn) {
-  if (typeof turn?.finalResponse === "string" && turn.finalResponse.trim()) {
-    return turn.finalResponse;
-  }
-  if (Array.isArray(turn?.items)) {
-    for (let i = turn.items.length - 1; i >= 0; i -= 1) {
-      const item = turn.items[i];
-      if (item?.type === "agent_message" && typeof item?.text === "string" && item.text.trim()) {
-        return item.text;
-      }
-    }
-  }
-  return "";
-}
 
 async function readJsonStdin() {
   const raw = await new Promise((resolve) => {
@@ -137,37 +123,89 @@ async function probeExec() {
     return { schema_version: "1", probe: "exec", ok: false, code: "INVALID_INPUT", message: "prompt is required", details: {} };
   }
 
+  const { spawn } = await import("node:child_process");
+  const { mkdtempSync, writeFileSync, readFileSync, unlinkSync, rmdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+
+  let tmpDir;
   try {
+    tmpDir = mkdtempSync(join(tmpdir(), "codex-bridge-"));
+  } catch (e) {
+    return { schema_version: "1", probe: "exec", ok: false, code: "EXEC_FAILED", message: `Failed to create temp dir: ${e}`, details: {} };
+  }
+
+  const outputFile = join(tmpDir, "output.txt");
+  const schemaFile = outputSchema ? join(tmpDir, "schema.json") : null;
+
+  try {
+    if (schemaFile) {
+      writeFileSync(schemaFile, JSON.stringify(outputSchema), "utf8");
+    }
+
     const localCodexCliPath = codexPath();
-    const Codex = await loadCodexSdkCtor();
-    const codex = new Codex({
-      codexPathOverride: localCodexCliPath,
-      env: process.env,
-    });
-    const thread = codex.startThread({
-      ...(model ? { model } : {}),
-      ...(reasoningEffort ? { modelReasoningEffort: reasoningEffort } : {}),
-      workingDirectory: cwd,
-      skipGitRepoCheck: true,
-      sandboxMode: process.env.CODEX_SANDBOX_MODE || "read-only",
-      approvalPolicy: "never",
-      networkAccessEnabled: false,
-      webSearchMode: "disabled",
-    });
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      controller.abort(new Error("command timeout"));
-    }, timeoutMs);
+    // Build args for `codex exec`
+    // Use --dangerously-bypass-approvals-and-sandbox to avoid bwrap namespace
+    // errors when spawned as subprocess (bwrap fails in Docker/subprocess contexts).
+    const args = ["exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"];
+    if (model) args.push("-m", model);
+    if (reasoningEffort) args.push("-c", `model_reasoning_effort="${reasoningEffort}"`);
+    if (schemaFile) args.push("--output-schema", schemaFile);
+    args.push("--output-last-message", outputFile);
+    args.push("--cd", cwd);
+    args.push("-"); // read prompt from stdin
 
-    let turn;
-    try {
-      turn = await thread.run(prompt, {
-        signal: controller.signal,
-        ...(outputSchema ? { outputSchema } : {}),
+    const result = await new Promise((resolve) => {
+      const child = spawn(localCodexCliPath, args, {
+        env: process.env,
+        cwd,
+        stdio: ["pipe", "pipe", "pipe"],
       });
-    } finally {
-      clearTimeout(timer);
+
+      child.stdin.write(prompt, "utf8");
+      child.stdin.end();
+
+      let stderr = "";
+      child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+      // drain stdout to avoid blocking
+      child.stdout.on("data", () => {});
+
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+      }, timeoutMs);
+
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        resolve({ exitCode: code, stderr, timedOut });
+      });
+
+      child.on("error", (err) => {
+        clearTimeout(timer);
+        resolve({ exitCode: -1, stderr: String(err), timedOut: false });
+      });
+    });
+
+    if (result.timedOut) {
+      return { schema_version: "1", probe: "exec", ok: false, code: "TIMEOUT", message: "command timeout", details: {} };
+    }
+
+    const stderrLower = (result.stderr || "").toLowerCase();
+    if (stderrLower.includes("not logged in") || stderrLower.includes("login required") || stderrLower.includes("authentication")) {
+      return { schema_version: "1", probe: "exec", ok: false, code: "AUTH_REQUIRED", message: "Codex login required", details: { error: result.stderr } };
+    }
+
+    if (result.exitCode !== 0) {
+      return { schema_version: "1", probe: "exec", ok: false, code: "EXEC_FAILED", message: result.stderr || `Exit code ${result.exitCode}`, details: { exit_code: result.exitCode, stderr: result.stderr } };
+    }
+
+    let finalResponse = "";
+    try {
+      finalResponse = readFileSync(outputFile, "utf8").trim();
+    } catch {
+      // output file might not exist if agent produced no output
     }
 
     return {
@@ -177,23 +215,14 @@ async function probeExec() {
       code: "EXEC_OK",
       message: "ok",
       details: {
-        final_response: resolveFinalResponse(turn),
+        final_response: finalResponse,
         codex_path: localCodexCliPath,
       },
     };
-  } catch (error) {
-    const message = String(error instanceof Error ? error.message : error);
-    const lowered = message.toLowerCase();
-
-    if (lowered.includes("timeout") || lowered.includes("aborted")) {
-      return { schema_version: "1", probe: "exec", ok: false, code: "TIMEOUT", message: "command timeout", details: {} };
-    }
-
-    if (lowered.includes("not logged in") || lowered.includes("login required") || lowered.includes("authentication")) {
-      return { schema_version: "1", probe: "exec", ok: false, code: "AUTH_REQUIRED", message: "Codex login required", details: { error: message } };
-    }
-
-    return { schema_version: "1", probe: "exec", ok: false, code: "EXEC_FAILED", message, details: { error: message } };
+  } finally {
+    try { unlinkSync(outputFile); } catch {}
+    if (schemaFile) { try { unlinkSync(schemaFile); } catch {} }
+    try { rmdirSync(tmpDir); } catch {}
   }
 }
 

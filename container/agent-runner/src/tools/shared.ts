@@ -576,7 +576,19 @@ export async function executeTool(
         vault_root?: string;
         model?: string;
       };
-      const vaultRoot = a.vault_root || '/Users/planee/Documents/Mywork';
+      // Always use the host path — never pass container paths (/workspace/...)
+      // to the quality loop engine, which runs in the core container.
+      const DEFAULT_VAULT_HOST_PATH =
+        process.env.NANOCLAW_SECRETARY_OBSIDIAN_VAULT_HOST_PATH?.trim() ||
+        '/Users/planee/Documents/Mywork';
+      const rawVaultRoot = a.vault_root || DEFAULT_VAULT_HOST_PATH;
+      const CONTAINER_VAULT_PREFIXES = [
+        '/workspace/extra/vault',
+        '/workspace/extra/obsidian-vault',
+      ];
+      const vaultRoot = CONTAINER_VAULT_PREFIXES.some((p) => rawVaultRoot.startsWith(p))
+        ? DEFAULT_VAULT_HOST_PATH
+        : rawVaultRoot;
 
       const toHostPath = (p: string): string => {
         if (p.startsWith('/workspace/extra/vault/')) {

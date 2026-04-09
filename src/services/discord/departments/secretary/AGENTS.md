@@ -52,6 +52,7 @@ safe_shell({"command": "ls '/Users/planee/Documents/Mywork/3. Resource/LLM Knowl
 - `domain`: 사용자 요청에서 추출 (예: "안전성검토", "첨가물정보제출")
 - `wiki_output_dir`: `/Users/planee/Documents/Mywork/3. Resource/LLM Knowledge Base/wiki`
 - `rubric_file`, `base_file`, `filter` → 생략 (도구가 자동 탐색)
+- `vault_root` → **절대 설정하지 말 것** (컨테이너 경로인 `/workspace/...`를 넘기면 안 됨. 기본값이 호스트 경로를 자동 사용함)
 
 예시:
 ```json
