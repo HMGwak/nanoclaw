@@ -39,6 +39,7 @@ try:
         SectionEdit,
         strip_code_blocks,
         filter_attachment_footnotes,
+        canonicalize_regulation_markdown,
         md_to_json,
         json_to_md,
         apply_json_diffs,
@@ -52,6 +53,8 @@ except ImportError:
         SectionEdit,
         strip_code_blocks,
         filter_attachment_footnotes,
+        canonicalize_regulation_markdown,
+        preserve_canonical_subtrees,
         md_to_json,
         json_to_md,
         apply_json_diffs,
@@ -64,6 +67,39 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+_META_CLAIM_TOKENS = (
+    "작업 완료 상태",
+    "결과 파일 위치",
+    "_final_claims",
+    "_codex_doc_list",
+    "_codex_map_log",
+    ".codex_tmp",
+    "로그 생성",
+    "체크 완료",
+    "산출물 검증",
+)
+
+_CANONICAL_SECTION_TOKENS = (
+    "규제 환경 요약",
+    "첨가물정보제출",
+    "분석결과제출",
+    "제품 규격 및 준수사항",
+)
+
+PROMPT_SURFACE_VERSION = "v2"
+
+
+def _sanitize_section_target(section_target: str) -> str:
+    if not section_target:
+        return ""
+    cleaned = section_target.strip()
+    for token in _CANONICAL_SECTION_TOKENS:
+        idx = cleaned.find(token)
+        if idx >= 0:
+            return cleaned[idx:].lstrip("# ").strip()
+    return cleaned
+
+
 # ── Codex MAP 설정 ───────────────────────────────────────────────
 # 2026-04-08: 배치별 agent.generate() 방식에서 Codex SDK 1회 호출로 대체.
 # 레거시 MAP 코드: legacy/map_legacy.py 참조.
@@ -73,6 +109,7 @@ try:
 except ImportError:
     try:
         import sys as _sys
+
         _sys.path.insert(0, str(Path(__file__).parent.parent.parent))
         from catalog.sdk_profiles.codex_oauth import run_codex_prompt  # type: ignore[no-redef]
     except ImportError:
@@ -88,99 +125,237 @@ CODEX_MAP_CLAIM_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "claim": {"type": "string"},
-                    "quote": {"type": "string"},
+                    "claim": {
+                        "type": "string",
+                        "description": "주제 제목 또는 섹션 헤더",
+                    },
+                    "detail": {
+                        "type": "string",
+                        "description": "상세 서술 (법적 근거, 조건, 예외 등 모두 포함)",
+                    },
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "목록형 요소 (예: 금지 첨가물 목록, 필수 서류 목록). 없으면 빈 배열.",
+                    },
+                    "item_legal_basis": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "각 items 항목별 법적 근거. items[i]에 해당하는 법률명+조항. items와 같은 길이.",
+                    },
+                    "legal_basis": {
+                        "type": "string",
+                        "description": "주제 전체의 법률명과 조항 번호 (예: '법률명 §조항'). 없으면 빈 문자열.",
+                    },
+                    "quote": {
+                        "type": "string",
+                        "description": "원문 인용 (최대 500자)",
+                    },
                     "doc_id": {"type": "string"},
                     "section_target": {"type": "string"},
                     "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
                 },
-                "required": ["claim", "quote", "doc_id", "section_target", "confidence"],
+                "required": [
+                    "claim",
+                    "detail",
+                    "items",
+                    "item_legal_basis",
+                    "legal_basis",
+                    "quote",
+                    "doc_id",
+                    "section_target",
+                    "confidence",
+                ],
             },
-        },
-        "patterns": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "반복_입력자료": {"type": "array", "items": {"type": "string"}},
-                "반복_산출물": {"type": "array", "items": {"type": "string"}},
-                "절차_단계": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["반복_입력자료", "반복_산출물", "절차_단계"],
         },
     },
-    "required": ["claims", "patterns"],
+    "required": ["claims"],
 }
 
 CODEX_MAP_PROMPT_TEMPLATE = """\
-당신은 문서 분석 오케스트레이터입니다.
-아래 {doc_count}개 문서에서 반복 패턴과 개별 claim을 추출하세요.
+당신은 규제 문서 분석 **최상위 오케스트레이터**입니다. 아래 {doc_count}개 문서에서 wiki 작성에 필요한 **RAG 수준의 상세 내용**을 추출합니다.
 
 문서 경로 목록:
 {doc_listing}
 
-작업 절차:
-1. 목록 파일을 cat으로 읽어 경로 목록을 파악하세요
-2. 각 문서를 순서대로 cat으로 읽으세요
-3. 문서를 읽은 직후, 목록 파일에서 해당 항목의 `- [ ]`를 `- [x]`로 수정하세요 (sed 사용)
-4. 각 문서에서 핵심 사실/절차/이슈를 claim으로 추출하세요
-5. 중복되는 claim은 병합하고 doc_id 목록을 통합하세요
-6. 반복 패턴 (입력자료, 산출물, 절차 단계)을 정리하세요
-7. 모든 문서 처리 후 최종 JSON을 반환하세요
+# 계층적 오케스트레이션 전략
 
-문서별 처리 로그:
-- 각 문서를 읽은 후 아래 디렉토리에 문서명과 동일한 JSON 파일을 생성하세요:
+## Level 1: 최상위 오케스트레이터 (당신)
+- 문서 목록을 파악하고 각 문서를 **Level 2 서브 오케스트레이터**로 위임
+- 문서 간 중복 주제는 마지막 병합 단계에서 해결
+- 각 문서가 완료되면 로그 파일 업데이트
+
+## Level 2: 문서별 서브 오케스트레이터 (각 문서당 1회)
+각 문서에 대해 아래 절차를 밟으세요:
+
+### Step 2a: 문서 전체 읽기 + 목차 파악
+1. `cat`으로 문서 전체를 읽으세요
+2. 목록 파일에서 `- [ ]`를 `- [x]`로 변경 (sed)
+3. Markdown 헤더(#, ##, ###) 구조를 파악하여 **섹션 맵**을 만드세요
+4. 각 섹션이 9개 주제 체크리스트 중 어디에 해당하는지 매핑
+
+### Step 2b: 섹션별 청킹 및 Level 3 위임
+섹션이 많거나 문서가 길면 **섹션 단위로 독립 처리**하세요:
+- 각 섹션(또는 논리 블록)마다 claim 추출을 **별도 패스**로 수행
+- 한 섹션에서 여러 주제가 나오면 여러 claim 생성
+- 절대 한 섹션을 다른 섹션 내용과 한 claim에 섞지 마세요
+
+### Step 2c: 섹션별 심층 추출 (Level 3)
+각 섹션에 대해:
+- 법률 원문을 조항 단위로 읽고 **모든 수치, 임계값, 기한, 목록 항목을 빠짐없이 추출**
+- 목록(list, enumeration)이 있으면 **전체 항목을 개별 items 배열로 보존** (축약 금지)
+- 법적 근거(§ 조항, Anlage, Annex)를 claim의 legal_basis에 정확히 기록
+- "당국은 ~할 수 있다" "관할 기관이 요구할 경우" 같은 **재량 조항은 '실무 운영 패턴' 힌트**로 별도 extracted_practice 항목에 기록
+
+## Level 1: 최종 병합
+모든 Level 2 결과를 수집하여:
+- 동일 주제의 claim은 items/legal_basis 합집합으로 병합 (전체 목록 보존)
+
+Atomic Claim 추출 원칙 (핵심):
+- 각 법적 요건은 원자적으로 추출하여 개별 법적 근거와 연결
+- 복합 조항 분해: 하나의 조항에 여러 요건이 있으면 각각 별도 item으로 분리
+- item_legal_basis: 각 items[i]에 해당하는 정확한 법적 근거를 동일 인덱스에 기록
+- items와 item_legal_basis는 반드시 같은 길이여야 함
+- 정확한 조항 번호 사용: 범위 표현보다 각 item의 정확한 소조항 명시
+- REDUCE 단계에서 각 item이 inline citation 형태로 렌더링되도록 정확한 근거 기록
+
+---
+
+# 9개 주제 체크리스트 (모든 문서에서 탐색)
+
+**각 주제마다 문서에 존재하면 claim 생성, 없으면 status="absent" (name만 기록, claim 생성 안 함)**
+
+1. **정보 제출 시기** — 신규/변경/정기 제출 기한, 기산일, 연간 주기, 사전 통지 리드타임
+2. **제출해야 하는 정보** — 성분, 배출값, 제품 식별정보, 포장 이미지, 시험자료, 독성자료, 판매량, 제출처 기관/포털 URL/파일 포맷(XML/PDF 등)
+3. **제품 규격 positive/negative list** — 허용 첨가물 목록(positive) / 금지 첨가물 목록(negative). 전체 항목 items 배열로 보존.
+4. **유해물질 규제** — 특정 화학물질, CMR, 알레르겐, 비타민·카페인 등 건강 효과 암시 물질 규제
+5. **기타 재료품 규격** — 필터, 궐련지, 접착제, 팁페이퍼, 캡슐 등 담배 구성품 기준
+6. **TNCO 및 연기성분 규제** — T/N/CO 상한, 측정법, 기타 연기성분(알데하이드, HCN, NNK 등)
+7. **가향 규제** — 특징향 금지, 향료 첨가 제한, 멘톨 금지
+8. **제품 물리 규격** — 길이, 둘레, 무게, 필터 길이, 포장 단위, 최소 판매 단위
+9. **그 외** — 라벨/경고문구, 광고금지, 라이선스, 추적관리, 벌칙, 통과/진입 요건
+
+---
+
+# claim 추출 핵심 원칙
+
+1. **1 claim = 1 주제 + 모든 상세**: 원자적 사실이 아니라 주제별 전체 상세 블록
+2. **RAG 수준**: wiki 독자가 원문 없이도 완전히 이해 가능
+3. **원문 내용만**: 다른 국가의 관행이나 일반 상식을 섞지 말 것
+4. **Items 전체 보존**: 원문에 10개 항목이 있으면 items에 10개 모두 나열. 일부만 예시로 들지 말 것.
+5. **수치/기한 원형 보존**: "**10 mg/개비**", "**30일 이내**", "**매년 12월 31일**" 등을 원문 그대로 detail에 기록 (wiki에서 강조 렌더링됨)
+6. **재량 조항 → 실무 힌트**: "당국이 ~를 요구할 수 있다", "관할 기관 판단에 따라" 등 재량 표현이 있으면 detail 끝에 `[실무 패턴: ...]`로 별도 명시
+7. **최종 응답은 규제 claims만**: 작업 상태, 파일 경로, 로그 생성 여부, 체크리스트 진행률, 결과 저장 위치, 검증 완료 메시지를 claim으로 만들지 말 것
+8. **임시 파일/내부 산출물 금지**: `.codex_tmp`, `_final_claims`, `_codex_doc_list`, `_codex_map_log`, `작업 완료 상태`, `결과 파일 위치` 같은 내부 메타데이터를 claims/doc_id/quote/detail에 넣지 말 것
+9. **최종 응답 본문이 진짜 산출물**: 파일에 따로 저장했다고 설명하지 말고, 최종 assistant 응답 자체를 schema에 맞는 최종 JSON으로 반환할 것
+
+## 각 claim 필드 (구조만, 내용은 실제 문서에서)
+
+- **claim**: 주제 제목 (예: 한 문서에서 다루는 조항/주제 1개)
+- **detail**: 상세 서술. 문서에 존재하는 요소만 포함:
+  - 법적 근거: 법률명 + 조항 번호
+  - 적용 대상: 제품군 / 사업자 / 상황
+  - 조건과 수치: 임계값 / 기한 / 주기 / 예외
+  - 위반 시 결과: 벌칙 / 행정처분
+  - 실무 패턴 힌트: 재량 조항에서 유추된 운영 힌트 (있으면)
+- **items**: 문서에 목록 형태로 존재하는 경우 **전체 항목** 배열. 없으면 `[]`.
+- **item_legal_basis**: 각 items[i]에 해당하는 법적 근거 배열. items와 같은 길이. 각 item이 어떤 법 조항에서 유래했는지 정확히 기록.
+- **legal_basis**: 주제 전체의 법률 약어 + 조항 번호 형식. 문서에 명시된 것만.
+- **quote**: 원문 핵심 구문 1-3문장 (원문 언어 그대로, 최대 500자)
+- **doc_id**: 파일명 (여러 문서 해당 시 세미콜론 연결)
+- **section_target**: wiki 섹션 — 아래 중 선택:
+  - `## 규제 환경 요약`
+  - `## 첨가물정보제출 > ### 규제 요건` / `### 신규제출` / `### 변경제출` / `### 정기제출`
+  - `## 분석결과제출 > ### 규제 요건` / `### 신규제출` / `### 변경제출` / `### 정기제출`
+  - `## 제품 규격 및 준수사항 > ### 담배 원료 (tobacco)` / `### 담배 외 원료 및 재료 (other than tobacco)` / `### 담배 제품 (tobacco products)`
+- **confidence**: high / medium / low
+
+## 나쁜 claim (하지 마세요)
+
+- "해당 국가는 일부 첨가물 사용을 금지한다" — 추상적, 구체 항목·조항 없음
+- "대부분의 국가는 경고문구를 요구한다" — 일반화
+- 문서에 없는 국가명/수치/법률명을 추측
+- items에 "..." 또는 "기타 등등"으로 목록을 축약
+- 여러 섹션 내용을 한 claim에 뭉쳐서 법적 근거가 모호해지는 것
+- "작업 완료 상태", "결과 파일 위치", "로그 17개 생성" 같은 오케스트레이션/메타 보고
+- `_final_claims_orchestrated_v2.json`, `.codex_tmp/...` 같은 임시 산출물 경로를 규제 claim처럼 반환하는 것
+
+---
+
+# 문서별 처리 로그
+
+각 문서를 처리한 후 아래 디렉토리에 파일명과 동일한 JSON 파일을 생성하세요:
   {doc_log_dir}
-- 형식: {{"doc":"파일명.md","claims":추출수,"summary":"핵심 1줄 요약"}}
-- claim이 0이면: {{"doc":"파일명.md","claims":0,"reason":"스킵 사유"}}
-- 예: echo '{{"doc":"TANN.md","claims":2,"summary":"VOC 시험 흐름"}}' > {doc_log_dir}/TANN.md.json
 
-각 claim에 반드시 포함할 필드:
-- claim: 핵심 사실 (한국어)
-- quote: 원문 근거 1-2문장
-- doc_id: 파일명 (여러 문서에 걸친 경우 세미콜론으로 연결)
-- section_target: 이 claim이 들어갈 wiki 섹션 (예: "## 절차", "## 열린 이슈")
-- confidence: high/medium/low
+형식:
+- 처리 성공: {{"doc":"파일명.md","claims":추출수,"sections_processed":섹션수,"summary":"핵심 1줄 요약"}}
+- 스킵: {{"doc":"파일명.md","claims":0,"reason":"스킵 사유"}}
 
-패턴 정리 규칙:
-- patterns 배열의 각 문자열은 원자 항목 1개만 작성하세요.
-- 쉼표(,)로 여러 항목을 한 문자열에 합치지 마세요.
-- 가능한 경우 성격별 라벨을 붙이세요 (예: "문서: BOM", "시스템: SAP", "시험: 연기성분").
+---
 
-파일 접근 불가 시:
-- cat으로 문서를 읽을 때 permission denied, bwrap 오류, 빈 내용이 반환되면 즉시 중단하세요.
-- 읽지 못한 문서로 claim을 만들지 마세요.
-- 접근 불가 시 error: "FILE_ACCESS_DENIED"를 포함한 JSON을 반환하세요.
+# 파일 접근 불가 시
 
-원문에 없는 내용은 절대 추가하지 마세요."""
+- cat으로 문서를 읽을 때 permission denied, bwrap 오류, 빈 내용이면 즉시 중단
+- 읽지 못한 문서로 claim을 만들지 마세요
+- 접근 불가 시 error: "FILE_ACCESS_DENIED"를 포함한 JSON 반환
+
+**원문에 없는 내용은 절대 추가하지 마세요. 하지만 원문에 있는 내용은 모두 반영하세요.**"""
 
 
 # ── Prompts (REDUCE) ─────────────────────────────────────────────
 
 _REDUCE_SYSTEM_BASE = """\
-You are an expert wiki author. Synthesize the extracted pattern JSONs from multiple batches into a structured wiki note.
+You are an expert regulatory wiki author. Synthesize the extracted claims into a structured wiki note with RAG-level detail.
 
 {structure_block}
 
-Rules:
-- Use Obsidian-standard footnotes:
-  - In-text: [^1][^2] (numeric, short)
-  - At bottom in ## 각주 section: [^1]: [[(filename)]]
-  - Omit .md extension from footnote definitions
-- Every factual paragraph or bullet block MUST have at least one footnote citation. Not every single sentence needs its own citation — group citations at the paragraph/block level.
-- Stay grounded in raw documents. Do not invent facts. Cross-document synthesis (finding patterns across multiple docs) is allowed and encouraged — this is the purpose of a wiki.
-- Do NOT use defensive hedging phrases such as "사례 문서에서 직접 확인된" or "확인된 바에 따르면". Write direct factual sentences. Evidence is conveyed by footnote citations, not by repetitive source-assertion language.
-- Write concretely so a new team member can perform the same task using only this wiki.
-- Write ALL output in Korean.
-- Organize by meaning, not by exhaustive enumeration.
-- Do NOT use comma-chain sentences with 5+ items. If many items exist, group them into 2-4 labeled categories with one item per bullet.
-- Use bullets for procedures/checklists/decision branches, not for dumping all extracted items.
-- Do NOT use markdown tables (| |). Use grouped bullet lists instead.
-- Use indented sub-items with 4-space indent (NOT tab). Obsidian requires 4-space indentation for nested lists. Example:
-  - Level 0: `- item`
-  - Level 1: `    - sub-item` (4 spaces)
-  - Level 2: `        - sub-sub-item` (8 spaces)
-- For country/region sections, keep depth balanced. Include comparable sub-items (절차/필수 서류/주요 사례). If evidence is sparse, add one bullet stating the limitation with citation.
+## 입력 데이터 구조
+
+입력은 JSON 형태의 extraction이며, 핵심 필드는 다음과 같습니다:
+
+- **상세주제** (detailed_topics): 문서에서 추출된 주제별 상세 블록 배열. 각 항목:
+  - `주제`: 섹션 헤더
+  - `상세`: 법적 근거, 조건, 수치, 예외를 모두 포함하는 상세 서술
+  - `목록`: 원문의 전체 목록 (예: 금지 첨가물 50개)
+  - `법적근거`: 법률명 + 조항 번호
+  - `원문인용`: 원문 핵심 구문
+  - `출처`: 파일명
+  - `섹션`: wiki 내 배치 위치
+
+## 작성 핵심 원칙
+
+1. **RAG 수준 상세 보존**: `상세주제`의 `상세`와 `목록`을 **축약하지 말고 그대로 반영**하세요.
+   - 50개 금지 첨가물이 있으면 50개 모두 bullet로 나열
+    - 법 조항은 `법적근거` 필드를 그대로 본문에 표기 (예: "관련 법령의 해당 조항에 따라...")
+   - 수치, 기한, 임계값, 예외는 빠짐없이 보존
+2. **각 헤더가 충분히 풍부**해야 합니다. 독자가 원문을 보지 않고도 규제 내용 전체를 이해할 수 있어야 합니다.
+3. **주제를 섹션에 매핑**: 각 `상세주제`의 `섹션` 필드를 따라 적절한 wiki 섹션 아래 배치하세요.
+4. **목록은 불릿으로 전개**: `목록` 필드의 모든 항목을 하위 bullet로 나열하세요. 5개 넘어도 OK, 모두 보존.
+5. **수치/기한/임계값 Bold 강조**: 모든 숫자·기한·임계값·벌칙액은 `**값**`으로 감싸라.
+   - 예: `**10 mg/개비**`, `**30일 이내**`, `**매년 12월 31일**`, `**최대 50,000 EUR**`
+   - 실무자가 수치만 훑어도 핵심을 파악할 수 있어야 함
+6. 공통 규칙이 여러 제품군에 동일하게 적용되면 중복해서 3번 반복하지 말고 하나의 공통 bullet로 병합하라.
+7. 빈 섹션은 정확히 `해당 없음 (근거 문서 없음)`으로만 표기하라.
+
+## 형식 규칙
+
+- Obsidian 각주: 본문 `[^1]`, 정의 `[^1]: [[(파일명)#헤더]]` (파일명에서 .md 생략)
+- 모든 사실 문단/블록에 각주 출처 필수. 법적 근거가 명시된 bullet는 더 중요.
+- 원문에 없는 내용 추가 금지. 그러나 원문에 있는 상세는 **모두 반영**.
+- 방어적 헤징 금지 ("확인된 바에 따르면" 같은 표현).
+- 한국어 작성.
+- 마크다운 테이블 금지, bullet 구조 사용.
+- 들여쓰기: 4칸 스페이스 (탭 금지). Level 0 `- item`, Level 1 `    - sub-item`, Level 2 `        - sub-sub-item`.
+
+## 구조 규칙
+
+- 구조 템플릿 (위의 `Required wiki note structure`)을 정확히 따르세요. 섹션 추가/삭제/이름변경 금지.
+- 빈 섹션이 있으면 "해당 없음 (근거 문서 없음)" + 각주 표기.
+- 리스트 항목 안에 heading marker(`#`)를 쓰지 마세요.
+- 제품군 표시는 heading이 아니라 `- **제품군명:** 내용` 또는 `- **제품군명**` + 중첩 bullet만 허용합니다.
+- `법규:`, `실무:`, `제출 범위:` 같은 비정규 pseudo-label을 만들지 마세요.
 """
+
 
 _DEFAULT_STRUCTURE = [
     "## 핵심 성격",
@@ -194,8 +369,28 @@ _DEFAULT_STRUCTURE = [
 
 
 def _build_structure_block(doc_structure: list[str] | None = None) -> str:
-    """Build the wiki structure instruction block (shared by reduce and incremental prompts)."""
-    headings = doc_structure or _DEFAULT_STRUCTURE
+    """Build the wiki structure instruction block (shared by reduce and incremental prompts).
+
+    doc_structure comes from the JSONL spec structure entry.
+    If None/empty, falls back to _DEFAULT_STRUCTURE for backward compatibility
+    with wiki types that don't use a rubric (e.g., generic doc → wiki synthesis).
+    Layer 1 (tobacco country wiki) MUST always pass doc_structure — absence indicates
+    a configuration bug in the caller, not a valid synthesis path.
+    """
+    if not doc_structure:
+        # Backward compatibility for wiki types without spec-provided structure.
+        # Layer 1 callers (run_country_layer1.py) should always pass doc_structure.
+        import warnings
+
+        warnings.warn(
+            "doc_structure is None/empty — falling back to _DEFAULT_STRUCTURE. "
+            "For country layer1 wiki, doc_structure must come from the JSONL spec structure entry.",
+            UserWarning,
+            stacklevel=3,
+        )
+        headings = _DEFAULT_STRUCTURE
+    else:
+        headings = doc_structure
     lines = [
         "IMPORTANT: You MUST use EXACTLY the following heading structure. Do NOT add, rename, or reorder sections.",
         "",
@@ -206,16 +401,19 @@ def _build_structure_block(doc_structure: list[str] | None = None) -> str:
         lines.append(f"{i}. {h}")
     lines.append(f"{len(headings) + 2}. 각주 섹션 (raw 문서 파일명 기반)")
 
-    # Template pattern: {국가} → repeat per country
     has_template = any("{국가}" in h for h in headings)
     if has_template:
         lines.append("")
         lines.append("Template rule for {국가}:")
-        lines.append("- Headings marked with {국가} MUST be repeated for EACH country found in the raw documents.")
-        lines.append("- Replace {국가} with the actual country name (e.g. ### 대만, ### 러시아, ### 나이지리아).")
-        lines.append("- Under each country heading, include: 절차, 필수 서류, 주요 사례 as bullet points or sub-content.")
-        lines.append("- PMI and PMIzhora are NOT countries — they are partner organizations. Treat them as SEPARATE headings (e.g. ### PMI, ### PMIzhora) distinct from country headings.")
-        lines.append("- If a document involves both a country AND PMI/PMIzhora, place country-specific content under the country heading and PMI/PMIzhora coordination content under the respective partner heading.")
+        lines.append(
+            "- Headings marked with {국가} MUST be repeated for EACH country found in the raw documents."
+        )
+        lines.append(
+            "- Replace {국가} with the actual country name from the source documents."
+        )
+        lines.append(
+            "- Under each country heading, include only source-grounded content that belongs to that country-specific subtree."
+        )
 
     return "\n".join(lines)
 
@@ -223,6 +421,7 @@ def _build_structure_block(doc_structure: list[str] | None = None) -> str:
 def _build_reduce_system_prompt(doc_structure: list[str] | None = None) -> str:
     structure_block = _build_structure_block(doc_structure)
     return _REDUCE_SYSTEM_BASE.format(structure_block=structure_block)
+
 
 INCREMENTAL_CREATE_SYSTEM_PROMPT = """\
 You are an expert wiki author. Read the raw work documents below and create a structured wiki note.
@@ -302,6 +501,7 @@ Rules:
 
 # ── ChunkedSynthesizer ────────────────────────────────────────────
 
+
 class ChunkedSynthesizer:
     """Map-Reduce wiki synthesis from a large set of raw documents.
 
@@ -311,10 +511,26 @@ class ChunkedSynthesizer:
         batch_size: Number of documents processed per map step.
     """
 
-    def __init__(self, agent, batch_size: int = 10, doc_structure: list[str] | None = None, vault_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        agent,
+        batch_size: int = 10,
+        doc_structure: list[str] | None = None,
+        vault_root: Path | None = None,
+        country_filter: str | None = None,
+        system_prompt_addendum: str | None = None,
+        extract_prompt_override: str | None = None,
+        compose_prompt_override: str | None = None,
+        update_prompt_override: str | None = None,
+    ) -> None:
         self.agent = agent
         self.doc_structure = doc_structure
         self._vault_root = vault_root
+        self._country_filter = (country_filter or "").strip().lower()
+        self._system_prompt_addendum = system_prompt_addendum or ""
+        self._extract_prompt_override = extract_prompt_override
+        self._compose_prompt_override = compose_prompt_override
+        self._update_prompt_override = update_prompt_override
 
         # Adaptive batch size based on model
         model_name = getattr(agent, "model", "").lower()
@@ -375,6 +591,7 @@ class ChunkedSynthesizer:
         # Post-processing
         wiki = strip_code_blocks(wiki)
         wiki = filter_attachment_footnotes(wiki)
+        wiki = canonicalize_regulation_markdown(wiki, self.doc_structure)
 
         succeeded = list(self._succeeded_docs)
         logger.info("Successfully processed %d/%d docs", len(succeeded), len(docs))
@@ -412,7 +629,10 @@ class ChunkedSynthesizer:
             if cache_file.exists():
                 try:
                     cached = json.loads(cache_file.read_text(encoding="utf-8"))
-                    logger.info("Codex MAP loaded from cache (%d claims)", len(cached.get("claims", [])))
+                    logger.info(
+                        "Codex MAP loaded from cache (%d claims)",
+                        len(cached.get("claims", [])),
+                    )
                     return self._claims_to_extractions(cached, docs)
                 except Exception:
                     pass
@@ -431,25 +651,32 @@ class ChunkedSynthesizer:
         relative_paths: list[str] = []
         for p in docs:
             try:
-                relative_paths.append(str(p.relative_to(self._vault_root)) if self._vault_root else str(p))
+                relative_paths.append(
+                    str(p.relative_to(self._vault_root)) if self._vault_root else str(p)
+                )
             except ValueError:
                 relative_paths.append(str(p))
-        doc_list_file.write_text("\n".join(f"- [ ] {rp}" for rp in relative_paths), encoding="utf-8")
+        doc_list_file.write_text(
+            "\n".join(f"- [ ] {rp}" for rp in relative_paths), encoding="utf-8"
+        )
 
         # 문서별 처리 로그 디렉토리
         doc_log_dir = doc_list_file.parent / "_codex_map_log"
         doc_log_dir.mkdir(parents=True, exist_ok=True)
 
-        prompt = CODEX_MAP_PROMPT_TEMPLATE.format(
+        prompt_template = self._extract_prompt_override or CODEX_MAP_PROMPT_TEMPLATE
+        prompt = prompt_template.format(
             doc_count=len(docs),
             doc_listing=f"문서 경로 목록은 아래 파일에 한 줄에 하나씩 저장되어 있습니다. cat으로 읽으세요:\n{doc_list_file.resolve()}",
             doc_log_dir=str(doc_log_dir.resolve()),
         )
 
-        logger.info("Codex MAP: %d docs 전송 (cwd=%s, doc_list=%s)...",
-                     len(docs),
-                     str(self._vault_root) if self._vault_root else "project",
-                     doc_list_file)
+        logger.info(
+            "Codex MAP: %d docs 전송 (cwd=%s, doc_list=%s)...",
+            len(docs),
+            str(self._vault_root) if self._vault_root else "project",
+            doc_list_file,
+        )
         start = time.time()
 
         result = run_codex_prompt(
@@ -485,14 +712,15 @@ class ChunkedSynthesizer:
         # FILE_ACCESS_DENIED 감지
         if claims_data.get("error") == "FILE_ACCESS_DENIED":
             failed = claims_data.get("failed_files", [])
-            logger.error("Codex MAP: FILE_ACCESS_DENIED — %d files. Check sandbox cwd. Failed: %s",
-                         len(failed), failed[:5])
+            logger.error(
+                "Codex MAP: FILE_ACCESS_DENIED — %d files. Check sandbox cwd. Failed: %s",
+                len(failed),
+                failed[:5],
+            )
             return []
 
         claims = claims_data.get("claims", [])
-        logger.info("Codex MAP: %d claims, patterns: %s",
-                     len(claims),
-                     {k: len(v) for k, v in claims_data.get("patterns", {}).items()})
+        logger.info("Codex MAP: %d claims", len(claims))
 
         # 문서별 처리 로그 수집 (per-doc JSON files → merged log)
         if doc_log_dir.exists() and cache_dir:
@@ -502,14 +730,27 @@ class ChunkedSynthesizer:
                     entry = json.loads(log_file.read_text(encoding="utf-8"))
                     doc_log_entries.append(entry)
                 except (json.JSONDecodeError, OSError):
-                    doc_log_entries.append({"doc": log_file.stem, "claims": -1, "reason": "log parse error"})
+                    doc_log_entries.append(
+                        {
+                            "doc": log_file.stem,
+                            "claims": -1,
+                            "reason": "log parse error",
+                        }
+                    )
             if doc_log_entries:
                 doc_log_dest = cache_dir / "codex_map_doc_log.json"
                 doc_log_dest.write_text(
-                    json.dumps(doc_log_entries, ensure_ascii=False, indent=2), encoding="utf-8")
+                    json.dumps(doc_log_entries, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
                 skipped = sum(1 for d in doc_log_entries if d.get("claims", 0) == 0)
-                logger.info("Codex MAP doc log: %d entries (%d with claims, %d skipped) → %s",
-                            len(doc_log_entries), len(doc_log_entries) - skipped, skipped, doc_log_dest)
+                logger.info(
+                    "Codex MAP doc log: %d entries (%d with claims, %d skipped) → %s",
+                    len(doc_log_entries),
+                    len(doc_log_entries) - skipped,
+                    skipped,
+                    doc_log_dest,
+                )
             else:
                 logger.warning("Codex MAP doc log directory is empty")
             # 로그 디렉토리 정리
@@ -523,7 +764,9 @@ class ChunkedSynthesizer:
         if cache_file:
             try:
                 cache_file.write_text(
-                    json.dumps(claims_data, ensure_ascii=False, indent=2), encoding="utf-8")
+                    json.dumps(claims_data, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
             except Exception:
                 logger.warning("Failed to write Codex MAP cache")
 
@@ -537,7 +780,7 @@ class ChunkedSynthesizer:
         try:
             return json.loads(output)
         except (json.JSONDecodeError, TypeError):
-            match = re.search(r'\{[\s\S]*\}', output)
+            match = re.search(r"\{[\s\S]*\}", output)
             if match:
                 try:
                     return json.loads(match.group())
@@ -547,28 +790,73 @@ class ChunkedSynthesizer:
 
     @staticmethod
     def _claims_to_extractions(claims_data: dict, docs: list[Path]) -> list[dict]:
-        """Codex claim JSON → 기존 REDUCE 호환 extraction 형태로 변환."""
-        patterns = claims_data.get("patterns", {})
+        """Convert Codex claim JSON to REDUCE-compatible extraction format."""
         claims = claims_data.get("claims", [])
 
-        cases = []
+        # 주제별 상세 블록 (REDUCE가 이 내용을 참조하여 wiki 작성)
+        detailed_topics = []
         keywords: set[str] = set()
         for c in claims:
-            cases.append({
-                "사례": c.get("doc_id", ""),
-                "특이사항": f"{c['claim']} — \"{c.get('quote', '')}\"",
-                "section_target": c.get("section_target", ""),
-                "confidence": c.get("confidence", "medium"),
-            })
-            for word in c.get("claim", "").split():
+            haystacks = [
+                c.get("claim", ""),
+                c.get("detail", ""),
+                c.get("doc_id", ""),
+                c.get("quote", ""),
+            ]
+            joined = " ".join(part for part in haystacks if isinstance(part, str))
+            if any(token in joined for token in _META_CLAIM_TOKENS):
+                continue
+
+            items = c.get("items", []) or []
+            item_legal_basis = c.get("item_legal_basis", []) or []
+            claim_title = c.get("claim", "")
+            detail = c.get("detail", "")
+            legal_basis = c.get("legal_basis", "")
+            quote = c.get("quote", "")
+            doc_id = c.get("doc_id", "")
+            section_target = _sanitize_section_target(c.get("section_target", ""))
+            confidence = c.get("confidence", "medium")
+
+            can_expand_atomic = (
+                item_legal_basis
+                and len(item_legal_basis) == len(items)
+                and len(items) > 1
+            )
+
+            if can_expand_atomic:
+                for idx, (item_text, item_basis) in enumerate(
+                    zip(items, item_legal_basis)
+                ):
+                    atomic_topic = {
+                        "주제": f"{claim_title} ({idx + 1}/{len(items)})",
+                        "상세": item_text,
+                        "목록": [],
+                        "법적근거": item_basis or legal_basis,
+                        "원문인용": quote,
+                        "출처": doc_id,
+                        "섹션": section_target,
+                        "신뢰도": confidence,
+                    }
+                    detailed_topics.append(atomic_topic)
+            else:
+                topic = {
+                    "주제": claim_title,
+                    "상세": detail,
+                    "목록": items,
+                    "법적근거": legal_basis,
+                    "원문인용": quote,
+                    "출처": doc_id,
+                    "섹션": section_target,
+                    "신뢰도": confidence,
+                }
+                detailed_topics.append(topic)
+
+            for word in claim_title.split():
                 if len(word) > 2:
                     keywords.add(word)
 
         extraction = {
-            "반복_입력자료": patterns.get("반복_입력자료", []),
-            "반복_산출물": patterns.get("반복_산출물", []),
-            "절차_단계": patterns.get("절차_단계", []),
-            "사례별_특이점": cases,
+            "상세주제": detailed_topics,
             "주요_키워드": list(keywords)[:20],
             "_sources": [p.name for p in docs],
             "_source_paths": [str(p) for p in docs],
@@ -592,7 +880,13 @@ class ChunkedSynthesizer:
             if self._vault_root:
                 linked = _resolve_wikilinks(content, self._vault_root, max_depth=2)
                 for link_path, link_content in linked:
-                    parts.append(f"--- [참조됨: {path.name} → {link_path.name}] ---\n{link_content}")
+                    if self._country_filter and not _matches_country_filter(
+                        link_path, link_content, self._country_filter
+                    ):
+                        continue
+                    parts.append(
+                        f"--- [참조됨: {path.name} → {link_path.name}] ---\n{link_content}"
+                    )
 
         return "\n\n".join(parts)
 
@@ -603,7 +897,17 @@ class ChunkedSynthesizer:
     ) -> str:
         """Reduce extractions into a new wiki note."""
         user_prompt = self._build_reduce_user_prompt(extractions, docs, domain)
-        system_prompt = _build_reduce_system_prompt(self.doc_structure)
+        if self._compose_prompt_override:
+            structure_block = _build_structure_block(self.doc_structure)
+            system_prompt = (
+                self._compose_prompt_override.format(structure_block=structure_block)
+                + self._system_prompt_addendum
+            )
+        else:
+            system_prompt = (
+                _build_reduce_system_prompt(self.doc_structure)
+                + self._system_prompt_addendum
+            )
         return self.agent.generate(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -628,7 +932,9 @@ class ChunkedSynthesizer:
             source_list = "\n".join(f"- {s}" for s in sources)
             domain_line = f"도메인: {domain}\n\n" if domain else ""
 
-            nodes_json = json.dumps([n.model_dump() for n in nodes], ensure_ascii=False, indent=2)
+            nodes_json = json.dumps(
+                [n.model_dump() for n in nodes], ensure_ascii=False, indent=2
+            )
             user_prompt = (
                 f"{domain_line}"
                 f"기존 wiki (JSON 노드):\n{nodes_json}\n\n"
@@ -637,18 +943,27 @@ class ChunkedSynthesizer:
             )
 
             diff_response = self.agent.generate(
-                system_prompt=UPDATE_REDUCE_SYSTEM_PROMPT,
+                system_prompt=(
+                    self._update_prompt_override or UPDATE_REDUCE_SYSTEM_PROMPT
+                )
+                + self._system_prompt_addendum,
                 user_prompt=user_prompt,
             )
 
             # Apply JSON node diffs to current wiki
             prev_wiki = current_wiki
-            current_wiki = self._apply_section_diffs(current_wiki, diff_response)
+            current_wiki = self._apply_section_diffs(
+                current_wiki, diff_response, existing_wiki
+            )
 
             # Track success: wiki changed means diffs were applied
             if current_wiki != prev_wiki and ext.get("_map_ok", True):
                 self._succeeded_docs.extend(ext.get("_source_paths", []))
 
+        current_wiki = canonicalize_regulation_markdown(
+            current_wiki, self.doc_structure
+        )
+        current_wiki = preserve_canonical_subtrees(current_wiki, existing_wiki)
         return current_wiki
 
     # ── Incremental (single-pass) synthesis ──────────────────────
@@ -692,13 +1007,17 @@ class ChunkedSynthesizer:
             if cache_file and cache_file.exists():
                 try:
                     wiki = cache_file.read_text(encoding="utf-8")
-                    logger.info("Incremental batch %d/%d loaded from cache", i + 1, len(batches))
+                    logger.info(
+                        "Incremental batch %d/%d loaded from cache", i + 1, len(batches)
+                    )
                     succeeded.extend(str(p) for p in batch)
                     continue
                 except Exception:
                     pass
 
-            logger.info("Incremental batch %d/%d (%d docs)", i + 1, len(batches), len(batch))
+            logger.info(
+                "Incremental batch %d/%d (%d docs)", i + 1, len(batches), len(batch)
+            )
             raw_text = self._build_batch_text(batch)
             source_list = "\n".join(f"- {p.name}" for p in batch)
             domain_line = f"도메인: {domain}\n\n" if domain else ""
@@ -722,7 +1041,9 @@ class ChunkedSynthesizer:
                 # Subsequent batches → update existing wiki via MdDiff
                 nodes = md_to_json(wiki)
                 nodes_json = json.dumps(
-                    [n.model_dump() for n in nodes], ensure_ascii=False, indent=2,
+                    [n.model_dump() for n in nodes],
+                    ensure_ascii=False,
+                    indent=2,
                 )
                 user_prompt = (
                     f"{domain_line}"
@@ -747,29 +1068,45 @@ class ChunkedSynthesizer:
                 try:
                     cache_file.write_text(wiki, encoding="utf-8")
                 except Exception:
-                    logger.warning("Failed to write incremental cache for batch %d", i + 1)
+                    logger.warning(
+                        "Failed to write incremental cache for batch %d", i + 1
+                    )
 
         # Post-processing
         wiki = strip_code_blocks(wiki)
         wiki = filter_attachment_footnotes(wiki)
 
-        logger.info("Incremental synthesis: %d/%d docs succeeded", len(succeeded), len(docs))
+        logger.info(
+            "Incremental synthesis: %d/%d docs succeeded", len(succeeded), len(docs)
+        )
         return (wiki, succeeded)
 
-    def _apply_section_diffs(self, original: str, response: str) -> str:
+    def _apply_section_diffs(
+        self, original: str, response: str, reference_wiki: str | None = None
+    ) -> str:
         """Apply JSON node diffs from LLM response."""
         nodes = md_to_json(original)
         try:
             diffs = parse_validated_list(response, MdDiff)
         except ValueError as exc:
-            logger.warning("MdDiff parse failed, keeping original. error=%s response_preview=%.500s", exc, response)
+            logger.warning(
+                "MdDiff parse failed, keeping original. error=%s response_preview=%.500s",
+                exc,
+                response,
+            )
             return original
         if not diffs:
-            logger.warning("MdDiff response yielded 0 valid diffs. response_preview=%.500s", response)
+            logger.warning(
+                "MdDiff response yielded 0 valid diffs. response_preview=%.500s",
+                response,
+            )
             return original
         logger.info("Applying %d MdDiff operations", len(diffs))
         updated = apply_json_diffs(nodes, diffs)
-        return json_to_md(updated)
+        updated_md = canonicalize_regulation_markdown(
+            json_to_md(updated), self.doc_structure
+        )
+        return preserve_canonical_subtrees(updated_md, reference_wiki or original)
 
     def _build_reduce_user_prompt(
         self, extractions: list[dict], docs: list[Path], domain: str
@@ -854,7 +1191,23 @@ def _find_in_vault(name: str, vault_root: Path) -> Path | None:
     return matches[0] if matches else None
 
 
+def _matches_country_filter(path: Path, content: str, country_filter: str) -> bool:
+    path_blob = " ".join(part.lower() for part in path.parts)
+    if country_filter and country_filter in path_blob:
+        return True
+
+    if content.startswith("---"):
+        end = content.find("---", 3)
+        if end > 0:
+            fm = content[3:end].lower()
+            if f"country: {country_filter}" in fm:
+                return True
+
+    return False
+
+
 # ── Module-level helpers ──────────────────────────────────────────
+
 
 def _format_extractions(extractions: list[dict]) -> str:
     """Pretty-print list of extraction dicts for the reduce prompt."""
@@ -868,5 +1221,3 @@ def _format_extractions(extractions: list[dict]) -> str:
             text = str(ext)
         parts.append(f"--- 배치 {i} (출처: {sources_str}) ---\n{text}")
     return "\n\n".join(parts)
-
-

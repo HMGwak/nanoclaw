@@ -160,9 +160,7 @@ class RubricParser:
         items: list[RubricItem] = []
 
         # Split into item sections by ### headings under ## 평가 항목
-        eval_section_match = re.search(
-            r"## 평가 항목\s*\n(.*)", text, re.DOTALL
-        )
+        eval_section_match = re.search(r"## 평가 항목\s*\n(.*)", text, re.DOTALL)
         if not eval_section_match:
             return items
 
@@ -293,9 +291,7 @@ class Evaluator:
         for item in self.rubric.items:
             if item.item_type != "quantitative":
                 continue
-            measurement = self._run_measure(
-                item, output_files, reference_files
-            )
+            measurement = self._run_measure(item, output_files, reference_files)
             value = measurement["value"]
 
             # Hard gate check
@@ -313,9 +309,7 @@ class Evaluator:
             # Score conversion (only if max_score > 0)
             if item.max_score > 0:
                 ceiling = item.hard_gate if item.hard_gate else 1.0
-                score = min(
-                    item.max_score, (value / ceiling) * item.max_score
-                )
+                score = min(item.max_score, (value / ceiling) * item.max_score)
                 scores[item.name] = ItemScore(
                     score=round(score, 1),
                     rationale=measurement["detail"],
@@ -371,9 +365,7 @@ class Evaluator:
                 scores[name] = item_score
 
         total = sum(s.score for s in scores.values())
-        return EvalOutput(
-            scores=scores, hard_gates=hard_gates, total=round(total, 1)
-        )
+        return EvalOutput(scores=scores, hard_gates=hard_gates, total=round(total, 1))
 
     def _run_measure(
         self,
@@ -388,10 +380,11 @@ class Evaluator:
         timeout = self.rubric.config.measure_timeout_seconds
         result_container: list[dict] = []
         error_container: list[Exception] = []
+        fn = item.measure_fn
 
         def _run():
             try:
-                r = item.measure_fn(output_files, reference_files)
+                r = fn(output_files, reference_files)
                 result_container.append(r)
             except Exception as exc:
                 error_container.append(exc)
@@ -401,15 +394,11 @@ class Evaluator:
         thread.join(timeout=timeout)
 
         if thread.is_alive():
-            logger.error(
-                "measure() for '%s' timed out after %ds", item.name, timeout
-            )
+            logger.error("measure() for '%s' timed out after %ds", item.name, timeout)
             return {"value": 0.0, "detail": f"Timeout after {timeout}s"}
 
         if error_container:
-            logger.error(
-                "measure() for '%s' raised: %s", item.name, error_container[0]
-            )
+            logger.error("measure() for '%s' raised: %s", item.name, error_container[0])
             return {"value": 0.0, "detail": str(error_container[0])}
 
         if not result_container:
@@ -466,10 +455,63 @@ def _build_feedback(
     )
 
 
+# ── Spec-driven evaluation builder ──────────────────────────────────
+_SPEC_LOOP_FIELDS = (
+    "max_iterations",
+    "keep_threshold",
+    "discard_threshold",
+    "convergence_delta",
+)
+
+
+def build_evaluation_from_spec(spec_eval: dict) -> ParsedRubric:
+    """Build parsed loop evaluation config from JSONL layer1.evaluation.
+
+    Converts loop config and scoring items (including compiled measure
+    functions for quantitative items) into the same ParsedRubric shape
+    that RubricParser produces from rubric.md files.
+    """
+    loop_cfg = spec_eval.get("loop", {})
+    config = RubricConfig()
+    for field in _SPEC_LOOP_FIELDS:
+        if field in loop_cfg:
+            setattr(config, field, type(getattr(config, field))(loop_cfg[field]))
+
+    items: list[RubricItem] = []
+    for raw_item in spec_eval.get("scoring", {}).get("items", []):
+        measure_fn = None
+        if raw_item.get("item_type") == "quantitative" and raw_item.get(
+            "measure_source"
+        ):
+            measure_fn = RubricParser._compile_measure(
+                raw_item["measure_source"], raw_item.get("id", "unknown")
+            )
+        items.append(
+            RubricItem(
+                name=raw_item.get("name", raw_item.get("id", "")),
+                item_type=raw_item.get("item_type", "qualitative"),
+                max_score=float(raw_item.get("max_score", 0)),
+                description=raw_item.get("description", ""),
+                hard_gate=float(raw_item["hard_gate"])
+                if "hard_gate" in raw_item and raw_item["hard_gate"] is not None
+                else None,
+                anchors=raw_item.get("anchors") or None,
+                measure_fn=measure_fn,
+            )
+        )
+
+    logger.info(
+        "Built ParsedRubric from spec evaluation: %d items, loop=%s",
+        len(items),
+        {f: getattr(config, f) for f in _SPEC_LOOP_FIELDS if f in loop_cfg},
+    )
+    return ParsedRubric(config=config, items=items, extra_config={})
+
+
 # ── run_loop ──────────────────────────────────────────────────────
 def run_loop(
     task: TaskProtocol,
-    rubric_path: Path,
+    rubric_path: Path | None,
     input_files: list[Path],
     reference_files: list[Path],
     agents: AgentsProtocol,
@@ -481,9 +523,23 @@ def run_loop(
     run_id = str(uuid.uuid4())
     cancellation = CancellationToken()
 
-    rubric = RubricParser.parse(rubric_path)
+    parsed_override = None
+    if context_config:
+        parsed_override = context_config.get("_parsed_evaluation_override")
+
+    if parsed_override is not None:
+        rubric = parsed_override
+    elif rubric_path is not None:
+        rubric = RubricParser.parse(rubric_path)
+    else:
+        raise ValueError(
+            "run_loop requires either rubric_path or "
+            "context_config['_parsed_evaluation_override']"
+        )
+
     if context_config:
         rubric.extra_config.update(context_config)
+
     evaluator = Evaluator(rubric, agents)
 
     context = Context(
@@ -499,8 +555,10 @@ def run_loop(
     history: list[IterationRecord] = []
     prev_score = 0.0
     result: RunResult | None = None
-    first_run_metadata: dict = {}  # preserved from iter 1 for DB recording
+    first_run_metadata: dict = {}
     last_good_files: list[Path] = []
+    eval_output: EvalOutput | None = None
+    gate_failures: list[HardGateResult] = []
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -542,12 +600,16 @@ def run_loop(
                 if first_run_metadata.get("skipped"):
                     reason = first_run_metadata.get("reason", "skipped")
                     logger.info("Task skipped (reason=%s). Exiting loop early.", reason)
+                    final_dir = output_dir / "final"
                     if result.output_files:
-                        final_dir = output_dir / "final"
                         final_dir.mkdir(parents=True, exist_ok=True)
                         for f in result.output_files:
                             shutil.copy2(f, final_dir / f.name)
-                    skip_files = list((output_dir / "final").iterdir()) if (output_dir / "final").exists() else []
+                    skip_files = (
+                        list((output_dir / "final").iterdir())
+                        if (output_dir / "final").exists()
+                        else []
+                    )
                     report = LoopReport(
                         status="keep",
                         final_score=100.0,
@@ -558,11 +620,18 @@ def run_loop(
                     )
                     _write_report(output_dir / "report.json", report)
                     if first_run_metadata.get("all_docs"):
-                        _record_tracker(first_run_metadata, run_id, list(final_dir.iterdir()) if final_dir.exists() else [])
+                        _record_tracker(
+                            first_run_metadata,
+                            run_id,
+                            list(final_dir.iterdir()) if final_dir.exists() else [],
+                        )
                     if callbacks and callbacks.on_loop_complete:
                         callbacks.on_loop_complete(report)
                     return report
             else:
+                assert eval_output is not None, (
+                    "eval_output must be set from iteration 1"
+                )
                 feedback = _build_feedback(
                     iteration=iteration - 1,
                     eval_result=eval_output,
@@ -648,18 +717,14 @@ def run_loop(
             if 0 <= delta < config.convergence_delta:
                 record.verdict = "converged"
                 history.append(record)
-                _notify_verdict(
-                    callbacks, iteration, "converged", eval_output.total
-                )
+                _notify_verdict(callbacks, iteration, "converged", eval_output.total)
                 break
 
         # Max iterations check
         if iteration == config.max_iterations:
             record.verdict = "max_iterations"
             history.append(record)
-            _notify_verdict(
-                callbacks, iteration, "max_iterations", eval_output.total
-            )
+            _notify_verdict(callbacks, iteration, "max_iterations", eval_output.total)
             break
 
         # Continue with revise
@@ -668,7 +733,9 @@ def run_loop(
         _notify_verdict(callbacks, iteration, "revise", eval_output.total)
         logger.info(
             "PROGRESS iteration=%d verdict=%s score=%.1f",
-            iteration, record.verdict, eval_output.total,
+            iteration,
+            record.verdict,
+            eval_output.total,
         )
         # Incremental report write (crash resilience)
         _write_incremental_report(output_dir, history, run_id)
@@ -691,7 +758,11 @@ def run_loop(
 
         # Record to DB only after successful verdict
         if first_run_metadata.get("all_docs"):
-            _record_tracker(first_run_metadata, run_id, list(final_dir.iterdir()) if final_dir.exists() else [])
+            _record_tracker(
+                first_run_metadata,
+                run_id,
+                list(final_dir.iterdir()) if final_dir.exists() else [],
+            )
 
     elif status == "discard":
         discarded_dir.mkdir(parents=True, exist_ok=True)
@@ -714,7 +785,8 @@ def run_loop(
 
     logger.info(
         "PROGRESS complete status=%s score=%s",
-        report.status, report.final_score,
+        report.status,
+        report.final_score,
     )
 
     # Write report.json
@@ -792,12 +864,15 @@ def main():
     # Also log to output_dir/engine.log when --output is provided
     # (added after basicConfig so stderr handler is preserved)
     import sys as _sys
+
     for _a in _sys.argv:
-        if _a == '--output' and _sys.argv.index(_a) + 1 < len(_sys.argv):
+        if _a == "--output" and _sys.argv.index(_a) + 1 < len(_sys.argv):
             _log_dir = Path(_sys.argv[_sys.argv.index(_a) + 1])
             _log_dir.mkdir(parents=True, exist_ok=True)
             _fh = logging.FileHandler(_log_dir / "engine.log", encoding="utf-8")
-            _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+            _fh.setFormatter(
+                logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+            )
             logging.getLogger().addHandler(_fh)
             break
 
@@ -916,7 +991,9 @@ task의 실행 결과를 rubric으로 평가하여 keep/revise/discard를 반복
         domain_norm = args.domain.replace(" ", "")
         if rubrics_dir.exists():
             for f in rubrics_dir.iterdir():
-                if f.suffix == ".md" and (args.domain in f.name or domain_norm in f.name.replace(" ", "")):
+                if f.suffix == ".md" and (
+                    args.domain in f.name or domain_norm in f.name.replace(" ", "")
+                ):
                     args.rubric = f
                     logger.info("Auto-discovered rubric: %s", f)
                     break
@@ -963,7 +1040,9 @@ task의 실행 결과를 rubric으로 평가하여 keep/revise/discard를 반복
         context_config=context_config,
     )
 
-    logger.info("Loop completed: status=%s, score=%s", report.status, report.final_score)
+    logger.info(
+        "Loop completed: status=%s, score=%s", report.status, report.final_score
+    )
     logger.info("Report written to: %s", args.output / "report.json")
 
 
@@ -972,9 +1051,7 @@ def _load_task(task_spec: str) -> TaskProtocol:
     import sys
 
     if "." not in task_spec:
-        raise ValueError(
-            f"Invalid task spec '{task_spec}': must be 'module.ClassName'"
-        )
+        raise ValueError(f"Invalid task spec '{task_spec}': must be 'module.ClassName'")
     # Add engine's directory to sys.path for local task modules
     engine_dir = str(Path(__file__).parent)
     if engine_dir not in sys.path:
@@ -989,6 +1066,7 @@ def _record_tracker(metadata: dict, run_id: str, final_files: list[Path]) -> Non
     """Record processed docs to WikiTracker after successful verdict."""
     try:
         import sys as _sys
+
         engine_dir = str(Path(__file__).parent.parent.parent)
         if engine_dir not in _sys.path:
             _sys.path.insert(0, engine_dir)
@@ -1004,7 +1082,9 @@ def _record_tracker(metadata: dict, run_id: str, final_files: list[Path]) -> Non
         output_path = str(final_files[0]) if final_files else None
 
         tracker.record_run(run_id, domain, base_path, filter_pattern, all_docs, {})
-        tracker.complete_run(run_id, output_count=len(final_files), output_path=output_path)
+        tracker.complete_run(
+            run_id, output_count=len(final_files), output_path=output_path
+        )
 
         # Auto-copy to wiki output dir if specified (domain-locked)
         wiki_output_dir = metadata.get("wiki_output_dir")
@@ -1016,14 +1096,20 @@ def _record_tracker(metadata: dict, run_id: str, final_files: list[Path]) -> Non
                     if f.name != allowed_filename:
                         logger.warning(
                             "Domain lock: refusing to copy %s (allowed: %s)",
-                            f.name, allowed_filename,
+                            f.name,
+                            allowed_filename,
                         )
                         continue
                     dest = dest_dir / f.name
                     shutil.copy2(f, dest)
                     logger.info("Auto-copied wiki to %s", dest)
 
-        logger.info("DB recorded: %d docs for domain=%s, output=%s", len(all_docs), domain, output_path)
+        logger.info(
+            "DB recorded: %d docs for domain=%s, output=%s",
+            len(all_docs),
+            domain,
+            output_path,
+        )
     except Exception as exc:
         logger.warning("Failed to record to WikiTracker: %s", exc)
 
