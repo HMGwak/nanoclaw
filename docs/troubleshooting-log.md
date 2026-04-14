@@ -1,5 +1,42 @@
 # NanoClaw Troubleshooting Log
 
+## 2026-04-10: M365 Schedule Sync — Admin Consent 문제
+
+### 배경
+Obsidian vault ↔ Microsoft Todo + Outlook Calendar 동기화 기능(schedule_sync) 구현 중.
+MSAL Device Code Flow로 M365 인증 구현 완료, PoC 스크립트 작성.
+
+### 앱 등록 정보
+- 앱 이름: ONE_D
+- Client ID: `db105956-62b6-4bb2-a531-c436a26e9f70`
+- Tenant ID: `f3886a6c-0c14-4f69-a899-94f44f93c3a3`
+- 테넌트: `globalktng.onmicrosoft.com`
+
+### 확인된 동작
+- `User.Read` → ✅ 인증 성공 (`효민 곽 <ktg20160003@globalktng.onmicrosoft.com>`)
+- `Files.ReadWrite` → ✅ 동의 완료 (이전 OneDrive 연동 시 승인됨)
+- `Tasks.ReadWrite` → ❌ 관리자 동의 필요 화면 표시
+- `Calendars.ReadWrite` → ❌ 관리자 동의 필요 화면 표시
+
+### 원인
+테넌트 User consent 정책이 신규 앱/권한에 대해 관리자 사전 승인을 요구.
+현재 계정에 Global Administrator 또는 Application Administrator 권한 없음.
+- App registrations → API permissions → "Grant admin consent" 버튼 비활성화
+- `https://portal.azure.com/#view/Microsoft_AAD_IAM/ConsentPoliciesMenuBlade/~/UserSettings` → 401
+
+### 해결 방법 (미완료)
+App registrations → ONE_D → API permissions 화면에서
+**Global Admin 계정으로 "Grant admin consent for globalktng" 버튼 클릭** 필요.
+
+또는 Azure Portal → Enterprise applications → ONE_D → Permissions → Grant admin consent.
+
+### 현재 상태
+- `poc_test.py` 인증 자체는 정상 작동
+- Todo / Calendar API는 권한 해결 전까지 사용 불가
+- 관련 파일: `src/catalog/tasks/schedule_sync/msgraph_auth.py`, `poc_test.py`
+
+---
+
 ## 2026-03-26: OpenCode SDK 백엔드 통합
 
 ### 배경
