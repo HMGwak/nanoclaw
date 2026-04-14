@@ -51,7 +51,7 @@ safe_shell({"command": "ls '/Users/planee/Documents/Mywork/3. Resource/LLM Knowl
 사용자 확인 후 (또는 파일이 없으면 바로) `wiki_synthesis` 도구를 호출한다:
 - `domain`: 사용자 요청에서 추출 (예: "안전성검토", "첨가물정보제출")
 - `wiki_output_dir`: `/Users/planee/Documents/Mywork/3. Resource/LLM Knowledge Base/wiki`
-- `rubric_file`, `base_file`, `filter` → 생략 (도구가 자동 탐색)
+- `spec_path`, `base_file`, `filter` → 생략 (도구가 `src/catalog/tasks/wiki/specs/{domain}.json` 기반으로 자동 탐색)
 - `vault_root` → **절대 설정하지 말 것** (컨테이너 경로인 `/workspace/...`를 넘기면 안 됨. 기본값이 호스트 경로를 자동 사용함)
 
 예시:
@@ -91,7 +91,36 @@ wiki_synthesis({"domain": "안전성검토", "wiki_output_dir": "/Users/planee/D
 #### 디렉토리 탐색 최소화
 - vault 구조를 직접 탐색하느라 loop를 10회 이상 소비하는 패턴이 관찰됨
 - `wiki_synthesis` 호출 시 필요한 파라미터만 넘길 것: `domain` + `wiki_output_dir`
-- 나머지 파라미터(`rubric_file`, `base_file`, `filter`)는 도구가 자동 탐색하므로 생략
+- 나머지 파라미터(`spec_path`, `base_file`, `filter`)는 도구가 자동 탐색하므로 생략
+
+---
+
+### 일정 조회 (Obsidian vault 기반)
+
+사용자가 일정/업무 현황을 물으면 `safe_shell`로 `schedule_sync/task.py`를 호출한다.
+
+**트리거 예시:**
+- "주간현황", "이번 주 할일", "주간 업무" → 주간 리포트
+- "오늘 일정", "오늘 마감" → 오늘 리포트
+- "마감 임박", "다음 마감" → 14일 이내 마감 목록
+- "XXX 현황", "XXX 진행상황" → 키워드로 프로젝트 검색
+
+**호출 방법:**
+```
+safe_shell({"command": "PYTHONPATH=/Users/planee/Automation/nanoclaw /Users/planee/Automation/nanoclaw/.venv/bin/python3 /Users/planee/Automation/nanoclaw/src/catalog/tasks/schedule_sync/task.py 주간"})
+```
+
+쿼리 키워드는 사용자 메시지에서 추출해서 마지막 인자로 넘긴다:
+- "주간현황" → `task.py 주간`
+- "오늘 일정" → `task.py 오늘`
+- "러시아 진행상황" → `task.py 러시아`
+- "마감 임박" → `task.py 마감`
+
+**주의:**
+- vault 파일을 직접 수정하지 말 것 (read-only 조회만)
+- `@비서`, `@비서실` 등 봇 멘션은 쿼리에서 제거 후 전달
+
+---
 
 #### Codex MAP 타임아웃 주의
 - 기본 타임아웃: 3600초(1시간)
