@@ -2,6 +2,7 @@
 Test: Run the karpathy quality loop on an existing wiki for evaluate/revise.
 Takes the incremental wiki and polishes it through rubric-based iteration.
 """
+
 import sys
 import shutil
 import logging
@@ -14,12 +15,16 @@ _kl = _src / "catalog" / "methods" / "karpathy-loop"
 sys.path.insert(0, str(_src))
 sys.path.insert(0, str(_kl))
 
+
 def _load(name, fpath):
     spec = importlib.util.spec_from_file_location(name, fpath)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load module {name} from {fpath}")
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
     spec.loader.exec_module(mod)
     return mod
+
 
 _loop_types = _load("loop_types", _kl / "loop_types.py")
 _engine = _load("engine", _kl / "engine.py")
@@ -31,7 +36,10 @@ RunResult = _loop_types.RunResult
 Context = _loop_types.Context
 OpenAIAgents = _agents.OpenAIAgents
 
-from catalog.tasks.wiki.synthesizer import strip_code_blocks, filter_attachment_footnotes
+from catalog.tasks.wiki.synthesizer import (
+    strip_code_blocks,
+    filter_attachment_footnotes,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,14 +49,8 @@ logger = logging.getLogger(__name__)
 
 DOMAIN = "첨가물정보제출"
 INPUT_WIKI = Path("/tmp/wiki-test/첨가물정보제출_incremental.md")
-RUBRIC = Path(__file__).parent.parent / "methods/karpathy-loop/../../tasks/wiki/../methods/karpathy-loop" / "test_rubric.md"
+RUBRIC_FILE = _kl / "test_rubric.md"
 OUTPUT_DIR = Path("/tmp/wiki-test/quality-loop")
-
-# Find the actual rubric
-RUBRIC_DIR = Path(__file__).parent.parent.parent / "catalog/tasks/wiki/../../methods/karpathy-loop"
-RUBRIC_ACTUAL = Path(__file__).parent.parent.parent / "catalog/methods/karpathy-loop"
-# Simpler path
-RUBRIC_FILE = Path("/Users/planee/Automation/nanoclaw/src/catalog/tasks/wiki/rubrics") / f"rubric_{DOMAIN}.md"
 
 
 class PrebuiltWikiTask:
@@ -56,6 +58,7 @@ class PrebuiltWikiTask:
 
     def __init__(self, wiki_content: str):
         from catalog.tasks.wiki.task import WikiAgent
+
         self.wiki_content = wiki_content
         self.agent = WikiAgent()
 
@@ -85,7 +88,9 @@ class PrebuiltWikiTask:
         # Build feedback text from structured Feedback object
         feedback_lines = [f"총점: {feedback.total_score}"]
         for item in feedback.items:
-            feedback_lines.append(f"- [{item.name}] 점수: {item.score}/{item.max_score}")
+            feedback_lines.append(
+                f"- [{item.name}] 점수: {item.score}/{item.max_score}"
+            )
             feedback_lines.append(f"  근거: {item.rationale}")
             for imp in item.improvements:
                 feedback_lines.append(f"  개선: {imp}")
@@ -119,7 +124,11 @@ class PrebuiltWikiTask:
         context.output_dir.mkdir(parents=True, exist_ok=True)
         out_path = context.output_dir / f"{domain}.md"
         out_path.write_text(revised, encoding="utf-8")
-        logger.info("PrebuiltWikiTask.revise(): %d chars → %d chars", len(prev_wiki), len(revised))
+        logger.info(
+            "PrebuiltWikiTask.revise(): %d chars → %d chars",
+            len(prev_wiki),
+            len(revised),
+        )
 
         return RunResult(
             output_files=[out_path],
@@ -155,8 +164,12 @@ def main():
         context_config={"domain": DOMAIN},
     )
 
-    logger.info("Quality loop done: status=%s, score=%s, iterations=%d",
-                report.status, report.final_score, len(report.history))
+    logger.info(
+        "Quality loop done: status=%s, score=%s, iterations=%d",
+        report.status,
+        report.final_score,
+        len(report.history),
+    )
 
     # Copy final to OneDrive
     final_dir = OUTPUT_DIR / "final"

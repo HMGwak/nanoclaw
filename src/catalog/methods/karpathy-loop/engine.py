@@ -891,12 +891,12 @@ task의 실행 결과를 rubric으로 평가하여 keep/revise/discard를 반복
 
 사용 예시:
   # 1:1 legacy 모드 (파일별 wiki 생성)
-  python engine.py --task wiki_task.WikiTask \\
+  python engine.py --task catalog.tasks.wiki.task.WikiTask \\
     --rubric rubric.md --input "*.md" --output /tmp/out
 
   # N:1 synthesis 모드 (도메인별 wiki 합성)
   python engine.py --task task.WikiTask \\
-    --rubric rubrics/rubric_안전성검토.md \\
+    --rubric /path/to/rubric.md \\
     --input "dummy" --output /tmp/out \\
     --domain 안전성검토 \\
     --vault-root ~/Documents/Mywork \\
@@ -905,7 +905,7 @@ task의 실행 결과를 rubric으로 평가하여 keep/revise/discard를 반복
 
   # 로컬 Gemma4 모델 사용 (wiki 생성만, 평가는 gpt-5.4)
   python engine.py --task task.WikiTask \\
-    --rubric rubrics/rubric_안전성검토.md \\
+    --rubric /path/to/rubric.md \\
     --input "dummy" --output /tmp/out \\
     --domain 안전성검토 --model gemma4-e4b
 
@@ -929,7 +929,7 @@ task의 실행 결과를 rubric으로 평가하여 keep/revise/discard를 반복
         required=False,
         default=None,
         type=Path,
-        help="Path to rubric.md (auto-discovered from --domain if omitted)",
+        help="Path to rubric.md (required for CLI execution)",
     )
     parser.add_argument(
         "--input",
@@ -985,20 +985,10 @@ task의 실행 결과를 rubric으로 평가하여 keep/revise/discard를 반복
 
     args = parser.parse_args()
 
-    # Auto-discover rubric from domain if not provided
-    if args.rubric is None and args.domain is not None:
-        rubrics_dir = Path(__file__).parent.parent.parent / "tasks" / "wiki" / "rubrics"
-        domain_norm = args.domain.replace(" ", "")
-        if rubrics_dir.exists():
-            for f in rubrics_dir.iterdir():
-                if f.suffix == ".md" and (
-                    args.domain in f.name or domain_norm in f.name.replace(" ", "")
-                ):
-                    args.rubric = f
-                    logger.info("Auto-discovered rubric: %s", f)
-                    break
     if args.rubric is None:
-        logger.error("--rubric is required when domain-based auto-discovery fails")
+        logger.error(
+            "--rubric is required for CLI usage; domain-based rubric auto-discovery is not supported"
+        )
         raise SystemExit(1)
 
     # Load task class
@@ -1056,6 +1046,9 @@ def _load_task(task_spec: str) -> TaskProtocol:
     engine_dir = str(Path(__file__).parent)
     if engine_dir not in sys.path:
         sys.path.insert(0, engine_dir)
+    src_dir = str(Path(__file__).resolve().parents[3])
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
     module_path, _, class_name = task_spec.rpartition(".")
     module = importlib.import_module(module_path)
     cls = getattr(module, class_name)
@@ -1070,7 +1063,7 @@ def _record_tracker(metadata: dict, run_id: str, final_files: list[Path]) -> Non
         engine_dir = str(Path(__file__).parent.parent.parent)
         if engine_dir not in _sys.path:
             _sys.path.insert(0, engine_dir)
-        from catalog.tasks.wiki.wiki_tracker import WikiTracker
+        from catalog.tasks.wiki.wiki_tracker import WikiTracker  # type: ignore[import-not-found]
 
         tracker = WikiTracker()
         all_docs = [Path(p) for p in metadata["all_docs"]]

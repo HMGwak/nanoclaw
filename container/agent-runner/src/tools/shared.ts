@@ -342,7 +342,7 @@ async function runWebSearch(
   return fetched;
 }
 
-async function runListAgents(ctx: ExecutorContext): Promise<string> {
+async function runListAgents(_ctx: ExecutorContext): Promise<string> {
   const manager = getSubAgentManager();
   if (!manager || manager.size === 0) {
     return JSON.stringify({ ok: true, agents: [] });
@@ -571,7 +571,6 @@ export async function executeTool(
       const a = JSON.parse(argsJson) as {
         domain: string;
         wiki_output_dir: string;
-        rubric_file?: string;
         base_file?: string;
         filter?: string;
         vault_root?: string;
@@ -585,11 +584,6 @@ export async function executeTool(
       const rawVaultRoot = a.vault_root || DEFAULT_VAULT_HOST_PATH;
       const vaultRoot = normalizeVaultRoot(rawVaultRoot, DEFAULT_VAULT_HOST_PATH);
 
-      const rubricPath = a.rubric_file || findFileByDomain(
-        ['/workspace/project/src/catalog/tasks/wiki/rubrics'],
-        '.md',
-        a.domain,
-      );
       const basePath = a.base_file || findFileByDomain(
         [
           '/workspace/extra/vault/3. Resource/LLM Knowledge Base/index',
@@ -600,12 +594,11 @@ export async function executeTool(
       );
 
       const qualityLoopConfig: Record<string, string> = {
-        task: 'wiki_task.WikiTask',
+        task: 'catalog.tasks.wiki.task.WikiTask',
         domain: a.domain,
         vault_root: vaultRoot,
         wiki_output_dir: a.wiki_output_dir,
       };
-      if (rubricPath) qualityLoopConfig.rubric = toHostPath(rubricPath, vaultRoot);
       if (basePath) qualityLoopConfig.base = toHostPath(basePath, vaultRoot);
       if (a.filter) qualityLoopConfig.filter = a.filter;
       if (a.model) qualityLoopConfig.model = a.model;

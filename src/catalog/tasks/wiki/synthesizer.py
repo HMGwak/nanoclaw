@@ -371,7 +371,7 @@ _DEFAULT_STRUCTURE = [
 def _build_structure_block(doc_structure: list[str] | None = None) -> str:
     """Build the wiki structure instruction block (shared by reduce and incremental prompts).
 
-    doc_structure comes from the JSONL spec structure entry.
+    doc_structure comes from the spec structure entry.
     If None/empty, falls back to _DEFAULT_STRUCTURE for backward compatibility
     with wiki types that don't use a rubric (e.g., generic doc → wiki synthesis).
     Layer 1 (tobacco country wiki) MUST always pass doc_structure — absence indicates
@@ -379,12 +379,12 @@ def _build_structure_block(doc_structure: list[str] | None = None) -> str:
     """
     if not doc_structure:
         # Backward compatibility for wiki types without spec-provided structure.
-        # Layer 1 callers (run_country_layer1.py) should always pass doc_structure.
+        # Layer 1 callers (run_wiki.py layer1 behavior) should always pass doc_structure.
         import warnings
 
         warnings.warn(
             "doc_structure is None/empty — falling back to _DEFAULT_STRUCTURE. "
-            "For country layer1 wiki, doc_structure must come from the JSONL spec structure entry.",
+            "For country layer1 wiki, doc_structure must come from the spec structure entry.",
             UserWarning,
             stacklevel=3,
         )

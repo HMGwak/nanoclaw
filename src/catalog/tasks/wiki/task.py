@@ -15,7 +15,6 @@ import re
 import subprocess
 import time
 import uuid
-import fnmatch
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -99,13 +98,6 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 PROMPT_SURFACE_VERSION = "v2"
-
-# Domain aliases used when deriving automatic filename filters.
-# Example: "첨가물정보제출" domain docs are saved with "(규제준수)_..." filenames.
-AUTO_FILTER_DOMAIN_ALIASES: dict[str, str] = {
-    "첨가물정보제출": "규제준수",
-}
-
 
 # ── Local Gemma ──────────────────────────────────────────────────
 GEMMA_SCRIPT = Path.home() / "Automation" / "local_llm_model" / "run_local_gemma.sh"
@@ -351,122 +343,6 @@ The previous revision caused a score decrease. Analyze the feedback more careful
 """
 )
 
-COUNTRY_RULES_ADDENDUM = """
-
-## Country Wiki 추가 규칙
-
-### 구조 규칙
-1. JSONL spec이 정의한 canonical heading tree를 그대로 유지하라. 헤더 이름을 바꾸거나 새 헤더를 만들지 마라.
-2. `## 규제 환경 요약`, `## 첨가물정보제출`, `## 분석결과제출`, `## 제품 규격 및 준수사항` 네 개의 최상위 섹션은 반드시 유지하라.
-3. 제품군 차이가 필요하면 canonical 섹션 내부의 bullet로 표현하라. 헤더 안에 헤더를 넣거나 pseudo-heading을 만들지 마라.
-4. 법규상 사실, review-backed interpretation, 사례 기반 practical note는 같은 canonical 섹션 안에서 구분해 쓸 수 있지만, 별도 비정규 헤더(`실무`, `법규`, `요약`)를 만들지 마라.
-
-### 작성 형식
-1. 각주 형식은 Obsidian wikilink를 사용하라. 본문은 `[^1]`, 각주 정의는 `[^1]: [[(파일명)#헤더]]`.
-2. 들여쓰기는 4칸 스페이스만 사용하라. 탭 금지.
-3. 번호 목록은 실제 절차 단계에만 사용하라. 제품군 라벨, 소주제 라벨, 해설 라벨에 번호 목록을 쓰지 마라.
-4. 장문 쉼표 나열은 3~7개 의미 단위의 grouped bullets, 즉 읽기 쉬운 리스트 구조로 바꿔라.
-
-### 내용 규칙
-1. 원문과 source-backed review/case에 없는 내용 추가 금지.
-2. 국가별 제도/기관/조문 스타일을 다른 국가식으로 바꾸지 마라.
-3. Layer 1은 법문 중심, Layer 2는 review-backed clarification, Layer 3은 case-backed practical enrichment라는 역할 차이를 유지하라.
-4. ALL output in Korean.
-"""
-
-COUNTRY_REVISE_ADDENDUM = """
-
-Country-specific revision rules:
-1. 각주 정의에서 `[^N]:` prefix가 중복되어 있으면 제거하라. content에는 `[[(파일명)#헤더]]`만 포함.
-2. 텍스트 단락을 리스트로 변환하라. 3문장 이상의 연속 서술은 bullet로 분해.
-3. 절차의 번호 순서를 반드시 유지하라. 기존 번호를 재배열하지 말라. 내용만 수정하라.
-4. canonical heading tree를 깨지 마라. 기존 `##`, `###`, `####` heading node를 bullet이나 새 제목으로 바꾸지 마라.
-5. Law Review 소스가 Tobacco Law와 충돌하는 부분은 Layer 2에서만 review-backed interpretation으로 덮어쓰고, 법문 사실 자체를 지우지 마라.
-6. 서로 다른 제품군의 내용이 한 bullet에 섞여 있으면 제품군 라벨 bullet 또는 하위 bullet로 분리하라. 헤더를 새로 만들지 마라.
-7. 들여쓰기는 반드시 4칸 스페이스. 탭 문자를 생성하지 말라.
-"""
-
-COUNTRY_ALIASES: dict[str, list[str]] = {
-    "taiwan": ["taiwan", "taiwan _china", "대만", "台灣"],
-    "russia": ["russia", "russian federation", "러시아", "Россия"],
-    "turkey": ["turkey", "türkiye", "튀르키예", "터키"],
-    "uzbekistan": ["uzbekistan", "우즈베키스탄"],
-    "kazakhstan": ["kazakhstan", "카자흐스탄"],
-    "israel": ["israel", "이스라엘"],
-    "thailand": ["thailand", "태국", "泰國"],
-    "australia": ["australia", "호주"],
-    "germany": ["germany", "독일", "Deutschland"],
-    "uae": ["uae", "united arab emirates", "아랍에미레이트"],
-    "egypt": ["egypt", "이집트", "مصر"],
-    "timor-leste": ["timor-leste", "east timor", "동티모르", "Timor-Leste"],
-    "georgia": ["georgia", "조지아", "საქართველო"],
-    "maldives": ["maldives", "몰디브"],
-    "north-macedonia": [
-        "north macedonia",
-        "north-macedonia",
-        "북마케도니아",
-        "Северна Македонија",
-    ],
-}
-
-
-def _normalize_country(raw: str) -> str:
-    """YAML country 값을 정규화된 키로 변환."""
-    raw_lower = raw.strip().lower()
-    for key, aliases in COUNTRY_ALIASES.items():
-        if raw_lower in [a.lower() for a in aliases]:
-            return key
-    return raw_lower
-
-
-def _filter_docs_by_country(docs: list[Path], country: str) -> list[Path]:
-    """YAML frontmatter의 country 필드로 문서 필터링. 3중 fallback."""
-    import yaml
-
-    matched = []
-    target = _normalize_country(country)
-    for doc in docs:
-        try:
-            text = doc.read_text(encoding="utf-8")
-            if text.startswith("---"):
-                end = text.find("---", 3)
-                if end > 0:
-                    fm = yaml.safe_load(text[3:end])
-                    if fm and isinstance(fm, dict):
-                        doc_country = fm.get("country", "")
-                        if _normalize_country(str(doc_country)) == target:
-                            matched.append(doc)
-                            continue
-        except Exception:
-            pass
-        # 파일명 기반 fallback (한글 국가명 매칭)
-        kr_names = [a for a in COUNTRY_ALIASES.get(target, []) if not a.isascii()]
-        if any(name in doc.name for name in kr_names):
-            matched.append(doc)
-        # 폴더명 기반 fallback (path-segment 매칭)
-        elif target in [p.lower() for p in doc.parent.parts]:
-            matched.append(doc)
-    return matched
-
-
-def _discover_archive_mentions(vault_root: Path, country: str) -> list[Path]:
-    aliases = COUNTRY_ALIASES.get(_normalize_country(country), [country])
-    needles = [a.lower() for a in aliases]
-    roots = [vault_root / "4. Archive" / "work", vault_root / "4. Archive" / "Daily"]
-    matched: dict[str, Path] = {}
-    for root in roots:
-        if not root.exists():
-            continue
-        for doc in root.rglob("*.md"):
-            try:
-                text = doc.read_text(encoding="utf-8")
-            except Exception:
-                continue
-            blob = f"{doc.name}\n{text}".lower()
-            if any(needle in blob for needle in needles):
-                matched[str(doc)] = doc
-    return sorted(matched.values())
-
 
 # ── WikiTask ─────────────────────────────────────────────────────
 class WikiTask:
@@ -482,8 +358,6 @@ class WikiTask:
 
     def run(self, context) -> RunResult:
         """Dispatch to synthesis or legacy mode based on context.config."""
-        if context.config.get("country"):
-            return self._run_country_synthesis(context)
         if context.config.get("domain"):
             return self._run_synthesis(context)
         return self._run_legacy(context)
@@ -492,9 +366,9 @@ class WikiTask:
         """N:1 synthesis mode: discover → classify → synthesize → save."""
         domain = context.config["domain"]
         base_path = Path(context.config.get("base_path", ""))
+        view_name = context.config.get("view")
         vault_root = Path(context.config.get("vault_root", ""))
-        requested_filter_pattern = context.config.get("filter")
-        effective_filter_pattern = requested_filter_pattern
+        requested_filter_expr = context.config.get("filter")
 
         # wiki_output_dir is required
         wiki_output_dir = context.config.get("wiki_output_dir")
@@ -509,35 +383,10 @@ class WikiTask:
         else:
             parser = BaseIndexParser(vault_root)
             all_docs = parser.discover(
-                base_path, view_name=domain, filter_pattern=requested_filter_pattern
+                base_path,
+                view_name=view_name,
+                filter_expr=requested_filter_expr,
             )
-
-            # Safety guard: when caller omits filter, apply domain filename pattern
-            # only if it actually matches at least one document.
-            if not requested_filter_pattern:
-                normalized_domain = re.sub(r"\s+", "", domain)
-                auto_filter_token = AUTO_FILTER_DOMAIN_ALIASES.get(
-                    normalized_domain, normalized_domain
-                )
-                auto_filter_pattern = f"({auto_filter_token})_*.md"
-                narrowed = [
-                    p for p in all_docs if fnmatch.fnmatch(p.name, auto_filter_pattern)
-                ]
-                if narrowed:
-                    logger.info(
-                        "Applying auto domain filter %s (%d -> %d docs)",
-                        auto_filter_pattern,
-                        len(all_docs),
-                        len(narrowed),
-                    )
-                    all_docs = narrowed
-                    effective_filter_pattern = auto_filter_pattern
-                else:
-                    logger.info(
-                        "Auto domain filter %s matched 0 docs; keeping base/view matches (%d docs)",
-                        auto_filter_pattern,
-                        len(all_docs),
-                    )
 
         # Optional: limit docs for testing
         max_docs = context.config.get("max_docs")
@@ -629,112 +478,14 @@ class WikiTask:
             metadata={
                 "domain": domain,
                 "base_path": str(base_path),
+                "view": view_name,
                 "vault_root": str(vault_root),
                 "wiki_output_dir": context.config.get("wiki_output_dir"),
-                "filter_pattern": effective_filter_pattern,
+                "filter": requested_filter_expr,
                 "all_docs": succeeded_docs,  # only successfully processed docs
                 "docs_processed": [str(p) for p in docs_to_process],
             },
         )
-
-    def _run_country_synthesis(self, context) -> RunResult:
-        """Country mode: 단일 레이어의 소스 문서로 국가 wiki 생성/업데이트."""
-        country = context.config["country"]
-        layer = context.config.get("layer", "tobacco_law")
-        vault_root = Path(context.config.get("vault_root", ""))
-        wiki_output_dir = context.config.get("wiki_output_dir")
-
-        # 1. 소스 문서 수집
-        docs = self._discover_country_docs(context, country, layer, vault_root)
-        if not docs:
-            existing = self._load_existing_wiki(
-                context.reference_files, country, wiki_output_dir
-            )
-            if existing:
-                context.output_dir.mkdir(parents=True, exist_ok=True)
-                out_path = context.output_dir / f"{country}.md"
-                out_path.write_text(existing, encoding="utf-8")
-                return RunResult(
-                    output_files=[out_path],
-                    metadata={"country": country, "layer": layer, "skipped": True},
-                )
-            return RunResult(
-                output_files=[],
-                metadata={"country": country, "layer": layer, "skipped": True},
-            )
-
-        # 2. 기존 wiki 로드
-        existing_wiki = self._load_existing_wiki(
-            context.reference_files, country, wiki_output_dir
-        )
-
-        # 3. Synthesizer with country addendum
-        doc_structure = context.config.get("doc_structure")
-        synthesizer = ChunkedSynthesizer(
-            self.agent,
-            doc_structure=doc_structure,
-            vault_root=vault_root,
-            country_filter=country,
-            system_prompt_addendum=COUNTRY_RULES_ADDENDUM,
-            extract_prompt_override=context.config.get("spec_extract_prompt"),
-            compose_prompt_override=context.config.get("spec_compose_prompt"),
-            update_prompt_override=context.config.get("spec_update_prompt"),
-        )
-        wiki_content, succeeded = synthesizer.synthesize(
-            docs, existing_wiki, country, cache_dir=context.output_dir
-        )
-
-        if not wiki_content or not wiki_content.strip():
-            return RunResult(
-                output_files=[],
-                metadata={
-                    "country": country,
-                    "layer": layer,
-                    "error": "SYNTHESIS_FAILED",
-                },
-            )
-
-        # 4. 저장
-        context.output_dir.mkdir(parents=True, exist_ok=True)
-        out_path = context.output_dir / f"{country}.md"
-        out_path.write_text(wiki_content, encoding="utf-8")
-
-        return RunResult(
-            output_files=[out_path],
-            metadata={
-                "country": country,
-                "layer": layer,
-                "all_docs": succeeded,
-                "wiki_output_dir": wiki_output_dir,
-            },
-        )
-
-    def _discover_country_docs(
-        self, context, country: str, layer: str, vault_root: Path
-    ) -> list[Path]:
-        """레이어별 소스 문서 발견 + country 필터."""
-        base_path = Path(context.config.get("base_path", ""))
-        parser = BaseIndexParser(vault_root)
-        view_map = {
-            "tobacco_law": "Tobacco Law",
-            "law_review": "Law Reviews",
-        }
-        if layer == "compliance":
-            all_docs = []
-        else:
-            view_name = view_map.get(layer, layer)
-            all_docs = parser.discover(base_path, view_name=view_name)
-
-        if layer == "compliance":
-            extra_docs = parser.discover(base_path, filter_pattern="(규제준수)_*.md")
-            merged: dict[str, Path] = {str(p): p for p in all_docs}
-            for doc in extra_docs:
-                merged[str(doc)] = doc
-            for doc in _discover_archive_mentions(vault_root, country):
-                merged[str(doc)] = doc
-            all_docs = sorted(merged.values())
-
-        return _filter_docs_by_country(all_docs, country)
 
     def _run_legacy(self, context) -> RunResult:
         """Original 1:1 doc → wiki note mode."""
@@ -801,8 +552,6 @@ class WikiTask:
         system_prompt = context.config.get(
             "spec_revise_prompt"
         ) or self._select_revise_prompt(feedback)
-        if context.config.get("country"):
-            system_prompt = system_prompt + COUNTRY_REVISE_ADDENDUM
 
         for prev_file in feedback.previous_output_files:
             existing_wiki = prev_file.read_text(encoding="utf-8")

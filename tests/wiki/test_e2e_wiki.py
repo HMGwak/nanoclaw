@@ -1,6 +1,7 @@
 """E2E test: WikiTask N:1 synthesis + Quality Loop + ChatGPT OAuth."""
 
 import logging
+import importlib
 import sys
 from pathlib import Path
 
@@ -14,14 +15,22 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
-from task import WikiTask  # noqa: E402
-from agents import OpenAIAgents  # noqa: E402
-from engine import run_loop  # noqa: E402
+from catalog.tasks.wiki.spec_loader import SpecLoader  # noqa: E402
+
+_task_mod = importlib.import_module("task")
+WikiTask = getattr(_task_mod, "WikiTask")
+
+_agents_mod = importlib.import_module("agents")
+OpenAIAgents = getattr(_agents_mod, "OpenAIAgents")
+
+_engine_mod = importlib.import_module("engine")
+run_loop = getattr(_engine_mod, "run_loop")
+build_evaluation_from_spec = getattr(_engine_mod, "build_evaluation_from_spec")
 
 VAULT = Path.home() / "Documents" / "Mywork"
 BASE_PATH = VAULT / "3. Resource" / "LLM Knowledge Base" / "index" / "안전성검토.base"
 WIKI_DIR = VAULT / "3. Resource" / "LLM Knowledge Base" / "wiki"
-RUBRIC = Path("src/catalog/tasks/wiki/rubrics/rubric_안전성검토.md")
+SPEC_PATH = Path("src/catalog/tasks/wiki/specs/tobacco_regulation.json")
 OUTPUT = Path("/tmp/ql_wiki_synthesis")
 
 # Reference: existing wiki notes
@@ -32,17 +41,26 @@ print(f"Filter: (안전성검토)_*.md")
 print(f"Reference files ({len(reference_files)}):")
 for f in reference_files:
     print(f"  {f.name}")
-print(f"Rubric: {RUBRIC}")
+print(f"Spec: {SPEC_PATH}")
 print(f"Output: {OUTPUT}")
 print()
 
 task = WikiTask()
 agents = OpenAIAgents()
 
+spec_loader = SpecLoader(spec_path=SPEC_PATH)
+eval_config = spec_loader.load_evaluation("tobacco_regulation", "layer1")
+if not eval_config:
+    raise ValueError(
+        f"Spec at '{SPEC_PATH}' has no layer1.evaluation entry for "
+        "domain=tobacco_regulation layer=layer1."
+    )
+parsed_evaluation = build_evaluation_from_spec(eval_config)
+
 # N:1 synthesis mode via context.config
 report = run_loop(
     task=task,
-    rubric_path=RUBRIC,
+    rubric_path=None,
     input_files=[],  # discovery handled by base_index
     reference_files=reference_files,
     agents=agents,
@@ -54,10 +72,11 @@ report = run_loop(
         "filter": "(안전성검토)_*.md",
         "wiki_output_dir": str(WIKI_DIR),
         "max_docs": 150,  # 5 batches × 30 docs (gpt-5.4)
+        "_parsed_evaluation_override": parsed_evaluation,
     },
 )
 
-print(f"\n{'='*60}")
+print(f"\n{'=' * 60}")
 print(f"Status: {report.status}")
 print(f"Score: {report.final_score}")
 print(f"Iterations: {len(report.history)}")

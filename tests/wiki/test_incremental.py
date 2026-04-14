@@ -2,6 +2,7 @@
 Test script: incremental (single-pass) wiki synthesis vs map-reduce.
 Runs on a small subset (10 docs) and writes output to /tmp/wiki-test/.
 """
+
 import sys
 import logging
 from pathlib import Path
@@ -47,11 +48,11 @@ def main():
     agent = WikiAgent()
     logger.info("Agent model: %s", agent.model)
 
-    # Read rubric for doc_structure
-    rubric_path = Path(__file__).parent.parent / "methods/karpathy-loop" / "wiki_task.py"
     doc_structure = None  # use default structure
 
-    synthesizer = ChunkedSynthesizer(agent, doc_structure=doc_structure, vault_root=VAULT_ROOT)
+    synthesizer = ChunkedSynthesizer(
+        agent, doc_structure=doc_structure, vault_root=VAULT_ROOT
+    )
 
     # 4. Run incremental synthesis
     logger.info("=== Starting INCREMENTAL synthesis ===")
@@ -68,7 +69,11 @@ def main():
     # 5. Save result
     out_path = TEST_OUTPUT / f"{DOMAIN}_incremental.md"
     out_path.write_text(wiki_result, encoding="utf-8")
-    logger.info("Incremental result: %d chars, %d docs succeeded", len(wiki_result), len(succeeded))
+    logger.info(
+        "Incremental result: %d chars, %d docs succeeded",
+        len(wiki_result),
+        len(succeeded),
+    )
     logger.info("Saved to: %s", out_path)
 
 

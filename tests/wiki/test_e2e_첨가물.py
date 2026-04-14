@@ -1,5 +1,6 @@
 """E2E test: 첨가물정보제출 (신규/변경/정기) Wiki Synthesis."""
 
+import importlib
 import logging
 import re
 import sys
@@ -14,15 +15,27 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
-from task import WikiTask
-from agents import OpenAIAgents
-from engine import run_loop
-from base_index import BaseIndexParser
+from catalog.tasks.wiki.spec_loader import SpecLoader
+
+_task_mod = importlib.import_module("task")
+WikiTask = getattr(_task_mod, "WikiTask")
+
+_agents_mod = importlib.import_module("agents")
+OpenAIAgents = getattr(_agents_mod, "OpenAIAgents")
+
+_engine_mod = importlib.import_module("engine")
+run_loop = getattr(_engine_mod, "run_loop")
+build_evaluation_from_spec = getattr(_engine_mod, "build_evaluation_from_spec")
+
+_base_index_mod = importlib.import_module("base_index")
+BaseIndexParser = getattr(_base_index_mod, "BaseIndexParser")
 
 VAULT = Path.home() / "Documents" / "Mywork"
-BASE_PATH = VAULT / "3. Resource" / "LLM Knowledge Base" / "index" / "첨가물정보 제출.base"
+BASE_PATH = (
+    VAULT / "3. Resource" / "LLM Knowledge Base" / "index" / "첨가물정보 제출.base"
+)
 WIKI_DIR = VAULT / "3. Resource" / "LLM Knowledge Base" / "wiki"
-RUBRIC_DIR = Path("src/catalog/tasks/wiki/rubrics")
+SPEC_PATH = Path("src/catalog/tasks/wiki/specs/tobacco_regulation.json")
 OUTPUT_BASE = Path("/tmp/ql_첨가물")
 
 # Discover all 규제준수 docs
@@ -69,10 +82,19 @@ for k, v in classified.items():
 
 # Run each domain
 DOMAIN_CONFIG = {
-    "신규제출": {"rubric": RUBRIC_DIR / "rubric_신규제출.md", "max_docs": 30},
-    "변경제출": {"rubric": RUBRIC_DIR / "rubric_변경제출.md", "max_docs": 30},
-    "정기제출": {"rubric": RUBRIC_DIR / "rubric_정기제출.md", "max_docs": 30},
+    "신규제출": {"max_docs": 30},
+    "변경제출": {"max_docs": 30},
+    "정기제출": {"max_docs": 30},
 }
+
+spec_loader = SpecLoader(spec_path=SPEC_PATH)
+eval_config = spec_loader.load_evaluation("tobacco_regulation", "layer1")
+if not eval_config:
+    raise ValueError(
+        f"Spec at '{SPEC_PATH}' has no layer1.evaluation entry for "
+        "domain=tobacco_regulation layer=layer1."
+    )
+parsed_evaluation = build_evaluation_from_spec(eval_config)
 
 # Select which domain to run (pass as arg, or run all)
 domains_to_run = sys.argv[1:] if len(sys.argv) > 1 else list(DOMAIN_CONFIG.keys())
@@ -93,9 +115,9 @@ for domain in domains_to_run:
         print(f"\nSkipping {domain}: no docs")
         continue
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Running {domain}: {len(docs)} docs")
-    print(f"Rubric: {config['rubric']}")
+    print(f"Spec: {SPEC_PATH}")
 
     output_dir = OUTPUT_BASE / domain
     reference_files = sorted(WIKI_DIR.glob("*.md"))
@@ -105,7 +127,7 @@ for domain in domains_to_run:
 
     report = run_loop(
         task=task,
-        rubric_path=config["rubric"],
+        rubric_path=None,
         input_files=docs,  # pre-filtered docs
         reference_files=reference_files,
         agents=agents,
@@ -117,6 +139,7 @@ for domain in domains_to_run:
             "filter": "(규제준수)_*.md",
             "max_docs": max_docs,
             "prefilled_docs": [str(d) for d in docs],
+            "_parsed_evaluation_override": parsed_evaluation,
         },
     )
 

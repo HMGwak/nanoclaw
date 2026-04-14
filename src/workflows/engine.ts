@@ -3,8 +3,6 @@
  * Host-driven state machine for multi-bot orchestration.
  * Manages workflow lifecycle: creation, step execution, completion, and recovery.
  */
-import fs from 'fs';
-import path from 'path';
 import { CONTAINER_TIMEOUT, MAX_WORKFLOW_CONTAINERS } from '../config.js';
 import { getDatabase } from '../db.js';
 import { logger } from '../logger.js';
@@ -725,31 +723,10 @@ function parseQualityLoopConfig(
     return [];
   };
 
-  const domain = config.domain as string | undefined;
-  let rubricPath = (config.rubric as string) || '';
-  if (!rubricPath && domain) {
-    // Auto-discover rubric from domain name when not explicitly provided
-    const rubricsDir = path.join(
-      process.cwd(),
-      'src/catalog/tasks/wiki/rubrics',
-    );
-    try {
-      const files = fs.readdirSync(rubricsDir);
-      const normalized = domain.replace(/\s+/g, '');
-      const match =
-        files.find((f) => f.includes(domain) && f.endsWith('.md')) ||
-        files.find(
-          (f) =>
-            f.replace(/\s+/g, '').includes(normalized) && f.endsWith('.md'),
-        );
-      if (match) rubricPath = path.join(rubricsDir, match);
-    } catch {
-      // ignore — rubricPath stays empty
-    }
-  }
+  const rubricPath = (config.rubric as string) || '';
 
   return {
-    task: (config.task as string) || 'wiki_task.WikiTask',
+    task: (config.task as string) || 'catalog.tasks.wiki.task.WikiTask',
     rubricPath,
     inputFiles: toStringArray(config.input),
     referenceFiles: toStringArray(config.reference),

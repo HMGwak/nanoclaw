@@ -475,7 +475,7 @@ export const allTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: 'wiki_synthesis',
       description:
-        'Start a wiki synthesis or update workflow. Provide domain and wiki_output_dir — rubric_file and base_file are auto-discovered from the domain name if omitted. Ask the user for wiki_output_dir if not specified.',
+        'Start a spec-driven wiki synthesis or update workflow. Provide domain and wiki_output_dir — base_file is auto-discovered from the domain name if omitted. Ask the user for wiki_output_dir if not specified.',
       parameters: {
         type: 'object',
         properties: {
@@ -487,10 +487,6 @@ export const allTools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             type: 'string',
             description:
               'Absolute host path to the Obsidian folder where the finished wiki note will be saved (e.g. /Users/planee/Documents/Mywork/3. Resource/LLM Knowledge Base/wiki)',
-          },
-          rubric_file: {
-            type: 'string',
-            description: 'Optional: path to rubric .md file. Auto-discovered if omitted.',
           },
           base_file: {
             type: 'string',

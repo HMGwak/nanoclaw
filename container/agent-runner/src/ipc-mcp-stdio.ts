@@ -756,16 +756,12 @@ if (canStartWorkflow) {
     'wiki_synthesis',
     {
       description:
-        'Start a wiki synthesis or update workflow. Provide domain and wiki_output_dir — rubric_file and base_file are auto-discovered from the domain name if omitted. Ask the user for wiki_output_dir if not specified.',
+        'Start a spec-driven wiki synthesis or update workflow. Provide domain and wiki_output_dir — base_file is auto-discovered from the domain name if omitted. Ask the user for wiki_output_dir if not specified.',
       inputSchema: {
         domain: z.string().describe('Domain name (e.g. "안전성검토", "첨가물정보제출")'),
         wiki_output_dir: z
           .string()
           .describe('Absolute host path to the Obsidian folder where the finished wiki note will be saved (e.g. /Users/planee/Documents/Mywork/3. Resource/LLM Knowledge Base/wiki)'),
-        rubric_file: z
-          .string()
-          .optional()
-          .describe('Optional: path to rubric .md file. Auto-discovered if omitted.'),
         base_file: z
           .string()
           .optional()
@@ -789,11 +785,6 @@ if (canStartWorkflow) {
       const rawVaultRoot = args.vault_root || DEFAULT_VAULT_HOST_PATH;
       const vaultRoot = normalizeVaultRoot(rawVaultRoot, DEFAULT_VAULT_HOST_PATH);
 
-      const rubricPath = args.rubric_file || findFileByDomain(
-        ['/workspace/project/src/catalog/tasks/wiki/rubrics'],
-        '.md',
-        args.domain,
-      );
       const basePath = args.base_file || findFileByDomain(
         [
           '/workspace/extra/vault/3. Resource/LLM Knowledge Base/index',
@@ -803,13 +794,8 @@ if (canStartWorkflow) {
         args.domain,
       );
 
-      if (!rubricPath) {
-        return { content: [{ type: 'text' as const, text: `Error: rubric file not found for domain "${args.domain}". Please specify rubric_file manually.` }] };
-      }
-
       const qualityLoopConfig: Record<string, string> = {
-        task: 'wiki_task.WikiTask',
-        rubric: toHostPath(rubricPath, vaultRoot),
+        task: 'catalog.tasks.wiki.task.WikiTask',
         domain: args.domain,
         vault_root: vaultRoot,
         wiki_output_dir: args.wiki_output_dir,
