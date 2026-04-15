@@ -5,8 +5,11 @@
  * Adapted from F_nextboat2_toxprofile_maker/runtime/codex_bridge.mjs
  */
 import { existsSync } from "node:fs";
+import { platform as osPlatform } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+const IS_MACOS = osPlatform() === "darwin";
 
 const CODE = {
   RUNTIME_OK: "RUNTIME_OK",
@@ -162,10 +165,18 @@ async function probeExec() {
 
     const localCodexCliPath = codexPath();
 
-    // Build args for `codex exec`
-    // Use --dangerously-bypass-approvals-and-sandbox to avoid bwrap namespace
-    // errors when spawned as subprocess (bwrap fails in Docker/subprocess contexts).
-    const args = ["exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"];
+    // Build args for `codex exec`.
+    // On Linux/Docker we still need --dangerously-bypass-approvals-and-sandbox
+    // because Codex's internal bwrap cannot open a new namespace when spawned
+    // from inside another subprocess (Docker or NanoClaw's worker pool).
+    // On macOS the bypass is not needed — Codex uses the native Seatbelt
+    // sandbox, and OpenAI's own docs mark the bypass flag as "dangerous, only
+    // for already-isolated runners". Leaving it off lets Codex's built-in
+    // approval/sandbox layer run normally.
+    const args = ["exec", "--skip-git-repo-check"];
+    if (!IS_MACOS) {
+      args.splice(1, 0, "--dangerously-bypass-approvals-and-sandbox");
+    }
     if (model) args.push("-m", model);
     if (reasoningEffort) args.push("-c", `model_reasoning_effort="${reasoningEffort}"`);
     if (schemaFile) args.push("--output-schema", schemaFile);

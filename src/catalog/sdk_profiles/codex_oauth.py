@@ -2,7 +2,10 @@
 """Codex SDK bridge for nanoclaw wiki MAP.
 
 Calls the Node.js codex_bridge.mjs via subprocess to invoke Codex SDK.
-Uses CODEX_HOME isolation so on-disk global Codex state is ignored.
+Runs with an isolated CODEX_HOME rooted at `nanoclaw/temp/codex-local/`
+so that the user's global `~/.codex/` state is neither read nor
+mutated by wiki synthesis. Auth is synced one-way from the real
+`~/.codex/auth.json` into the isolated home on each call.
 Adapted from F_nextboat2_toxprofile_maker/tooling/codex_local.py.
 """
 
@@ -13,6 +16,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -25,8 +29,7 @@ _STATE_ROOT = _REPO_ROOT / "temp" / "codex-local"
 _CODEX_HOME = _STATE_ROOT / "home"
 _CONFIG_PATH = _CODEX_HOME / "config.toml"
 _CODEX_HOME_CONFIG = (
-    'cli_auth_credentials_store = "file"\n'
-    'forced_login_method = "chatgpt"\n'
+    'cli_auth_credentials_store = "file"\nforced_login_method = "chatgpt"\n'
 )
 
 
@@ -54,14 +57,20 @@ def _ensure_local_home() -> None:
 def _build_local_env() -> dict[str, str]:
     """Build environment for Codex bridge.
 
-    Uses real HOME for auth access.
-    Disables bwrap sandbox when running as subprocess (bwrap namespace
-    creation fails in Docker/subprocess contexts).
+    Initializes an isolated `CODEX_HOME` under the nanoclaw repo so that
+    Codex never reads or mutates the user's global `~/.codex/` state.
+    On Linux/Docker, also disables the bwrap sandbox because its
+    namespace creation fails when spawned from a subprocess context.
     """
+    _ensure_local_home()
     env: dict[str, str] = {k: v for k, v in os.environ.items() if v}
-    # Disable bwrap sandbox — fails with namespace permission errors
-    # when spawned from Docker or NanoClaw subprocess
-    env.setdefault("CODEX_SANDBOX_MODE", "off")
+    env["CODEX_HOME"] = str(_CODEX_HOME)
+    if sys.platform != "darwin":
+        # Linux/Docker only: Codex's internal bwrap cannot open a new
+        # namespace from inside an existing subprocess, so the CLI
+        # refuses to start without this escape hatch. macOS uses the
+        # native Seatbelt sandbox and does not need it.
+        env.setdefault("CODEX_SANDBOX_MODE", "off")
     return env
 
 
@@ -74,21 +83,36 @@ def _run_bridge(
     """Run codex_bridge.mjs with given probe command."""
     node_path = shutil.which("node")
     if not node_path:
-        return {"ok": False, "code": "NODE_NOT_FOUND", "message": "Node.js is required.", "details": {}}
+        return {
+            "ok": False,
+            "code": "NODE_NOT_FOUND",
+            "message": "Node.js is required.",
+            "details": {},
+        }
     if not _BRIDGE_PATH.exists():
-        return {"ok": False, "code": "BRIDGE_NOT_FOUND", "message": f"Bridge not found: {_BRIDGE_PATH}", "details": {}}
+        return {
+            "ok": False,
+            "code": "BRIDGE_NOT_FOUND",
+            "message": f"Bridge not found: {_BRIDGE_PATH}",
+            "details": {},
+        }
 
     completed = subprocess.run(
         [node_path, str(_BRIDGE_PATH), "--probe", probe, "--json"],
-        input=(json.dumps(stdin_payload, ensure_ascii=False) if stdin_payload is not None else None),
+        input=(
+            json.dumps(stdin_payload, ensure_ascii=False).encode("utf-8")
+            if stdin_payload is not None
+            else None
+        ),
         capture_output=True,
-        text=True,
+        text=False,
         timeout=timeout_s,
         env=_build_local_env(),
         cwd=str(_REPO_ROOT),
     )
 
-    stdout = (completed.stdout or "").strip()
+    stdout = (completed.stdout or b"").decode("utf-8", errors="replace").strip()
+    stderr = (completed.stderr or b"").decode("utf-8", errors="replace").strip()
     if stdout:
         try:
             payload = json.loads(stdout)
@@ -100,8 +124,12 @@ def _run_bridge(
     return {
         "ok": False,
         "code": "INVALID_BRIDGE_RESPONSE",
-        "message": (completed.stderr or stdout or "Bridge returned invalid JSON.").strip(),
-        "details": {"stdout": stdout, "stderr": (completed.stderr or "").strip(), "exit_code": completed.returncode},
+        "message": (stderr or stdout or "Bridge returned invalid JSON.").strip(),
+        "details": {
+            "stdout": stdout,
+            "stderr": stderr,
+            "exit_code": completed.returncode,
+        },
     }
 
 
@@ -136,7 +164,9 @@ def run_codex_prompt(
     if output_schema:
         payload["output_schema"] = output_schema
 
-    response = _run_bridge("exec", stdin_payload=payload, timeout_s=max(timeout_s + 10.0, 30.0))
+    response = _run_bridge(
+        "exec", stdin_payload=payload, timeout_s=max(timeout_s + 10.0, 30.0)
+    )
     details = response.get("details") or {}
     final_response = details.get("final_response") if isinstance(details, dict) else ""
 
