@@ -92,3 +92,43 @@ tobacco_regulation (country=Germany) 파이프라인의 반복 품질 개선 로
 
 ---
 
+## Cycle 2 — bullet-only + dedup + blank normalize (2026-04-15)
+
+**Run ID**: `aafdb05d` (실행 22:04 ~ 22:16)  
+**Prompt version**: v2
+
+**Code/prompt fixes applied:**
+- Layer1 compose prompt: "EVERY substantive content block MUST be bullet"
+- Layer1 compose prompt: 중복 bullet 금지 규칙
+- Layer2/3 update prompts: MdDiff `type: "list"` 강제
+- Layer2/3 update prompts: 동일 주장 중복 bullet 금지
+- `canonicalize_regulation_markdown`: 연속 blank line 정규화, orphan paragraph → bullet 자동 변환 (safety net)
+
+### Scores
+
+| Layer | iter1 | iter2 | iter3 | Final | Status | Δ vs cycle 1 |
+|---|---|---|---|---|---|---|
+| layer2 | 84.0 | 80.0 | **86.0** | **86.0** | **keep** 🎯 | +2.0 |
+| layer3 | **81.0** | 73.7 | 80.0 | 81.0 | max_iterations (rollback) | +8.9 |
+
+**Layer2**: iter2 하락(84→80) 후 iter3 반등 86. best_snapshot rollback 덕분.  
+**Layer3**: iter1 이미 81, best_snapshot = iter1의 81.
+
+### Structure & Footnote
+- Canonical headings: **33/33 present**
+- Footnote defs: **5 unique**
+- 최종 wiki: 189줄, 25KB
+- Orphan paragraphs 안전망 테스트: 3 → 0 (canonicalize 재실행 시)
+
+### Issues found
+1. layer1 stale output에 일부 paragraph 남아있음 (compose 재실행 필요)
+2. 분석결과제출 > 규제 요건에 empty marker 버블 밖 잔존 의심
+3. Coverage 여전히 개선 여지 (layer2 22/30, layer3 14/25)
+
+### Next fix (cycle 3)
+- **3-1**: layer1 fresh run으로 compose v2 검증
+- **3-2**: stale output cleanup 확인
+- **3-3**: empty marker 중복 조사
+
+---
+

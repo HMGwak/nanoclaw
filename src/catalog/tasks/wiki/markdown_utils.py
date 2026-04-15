@@ -699,7 +699,48 @@ def canonicalize_regulation_markdown(
         return fixed
 
     rebuilt = _repair_product_label_nesting(rebuilt)
-    return "\n".join(rebuilt).rstrip() + "\n"
+
+    # Safety net: convert orphan paragraph lines inside content sections
+    # to bullets. LLM sometimes emits narrative prose directly under a
+    # heading instead of a `- ...` bullet. The wiki format requires every
+    # substantive content block to be a bullet so Citation Ratio and
+    # readability behave predictably. We skip frontmatter, blank lines,
+    # headings, footnote defs, existing bullets/numbered lists, and the
+    # canonical empty marker.
+    def _is_already_structured(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped:
+            return True
+        if stripped == "---":
+            return True
+        if stripped.startswith("#"):
+            return True
+        if re.match(r"^\s*(?:[-*+]|\d+\.)\s+", line):
+            return True
+        if re.match(r"^\s*\[\^[^\]]+\]:", stripped):
+            return True
+        if stripped == "해당 없음 (근거 문서 없음)":
+            return True
+        return False
+
+    in_frontmatter = False
+    bulletized: list[str] = []
+    for line in rebuilt:
+        if line.strip() == "---":
+            in_frontmatter = not in_frontmatter
+            bulletized.append(line)
+            continue
+        if in_frontmatter or _is_already_structured(line):
+            bulletized.append(line)
+            continue
+        # Leading whitespace (if any) is dropped because orphan paragraphs
+        # should become top-level bullets under their heading, not nested.
+        bulletized.append(f"- {line.strip()}")
+
+    text = "\n".join(bulletized).rstrip() + "\n"
+    # Collapse runs of 3+ blank lines to a single blank line separator.
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text
 
 
 def preserve_canonical_subtrees(current: str, reference: str) -> str:
