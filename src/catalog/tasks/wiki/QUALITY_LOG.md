@@ -132,6 +132,83 @@ tobacco_regulation (country=Germany) 파이프라인의 반복 품질 개선 로
 
 ---
 
+## Cycle 4 — Runtime filter test (2026-04-15)
+
+**Run ID**: `0d41a5c8` (layer2/3 only)  
+**Prompt version**: v2 + 런타임 doc_id 필터 (commit `32f27c8`)
+
+Cycle 3의 Germany/Indonesia/Nigeria 오염 대응.
+- Codex MAP에 "⚠️ 절대 규칙: 파일 접근 제한" 프롬프트 추가
+- `synthesizer._map()`에 런타임 doc_id 필터 — sandbox_docs 외의 claim drop
+
+### Scores
+
+| Layer | Status | Score |
+|---|---|---|
+| layer2 | max_iterations | 83.3 |
+| layer3 | converged | 78.3 |
+
+모든 claim doc_id가 독일 원문. 오염 해결. 하지만 이는 trust-based soft barrier, 구조적 격리는 아님.
+
+---
+
+## Cycle 5 — tmp/ 파일복사 sandbox (2026-04-15)
+
+**Run ID**: `46607d6c` (fresh full)  
+**Prompt version**: v2 + tmp/ sandbox (commit `87a165d`)
+
+- `nanoclaw/tmp/codex_map_{ts}_{pid}/` 생성, caller-supplied docs 복사
+- Codex cwd를 sandbox_root로 설정 → 상대경로는 staged 파일만 접근
+- 심링크 대신 파일복사 (realpath 탈출 차단)
+
+### Scores
+
+| Layer | Status | Score |
+|---|---|---|
+| layer1 | converged | **84.9** |
+| layer2 | **keep** 🎯 | **86.7** (iter1 즉시) |
+| layer3 | max_iterations | 81.8 (best_snapshot rollback) |
+
+- 최종 wiki: 202줄, 33 canonical 헤딩, 4 unique footnote
+- 모든 claim doc_id = 독일 원문
+- `tmp/` cleanup 정상 (leftover 0)
+- Cycle 5가 역대 최고 점수 달성, fresh fallback 운영 검증됨
+
+---
+
+## Cycle 6 — strict discard + quality_score (2026-04-16)
+
+**Run ID**: `6a1602d8` (fresh full)  
+**Prompt version**: v2 + sandbox + commits `e0e5b00` (strict discard), `479fa51` (CODEX_HOME fix), `5b82a5b` (workspace-write)
+
+Commit `e0e5b00` 주요 변경:
+- Karpathy loop `max_iterations` + `best < keep_threshold` = **strict discard**
+- Final wiki frontmatter에 `quality_score: X.X` 주입
+
+Cycle 6는 commit 479fa51/5b82a5b **이전**에 시작됐으므로 Task 2+3+4는 다음 cycle에서 검증.
+
+### Layer1 (confirmed, 진행중 일부)
+
+- iter1=78.7 revise → iter2=**85.0 keep**
+- Exactly at keep_threshold, 통과
+
+Layer2/3 결과 대기 중.
+
+---
+
+## 5-country batch (Cycle 7+)
+
+**배치 대상**: Taiwan _China (10 docs), Russia (32), Israel (16), United Arab Emirates (15), Thailand (40)
+
+**스크립트**: `tmp/run_5_countries.sh` (순차 실행)  
+**배치 ID**: `blzsqncd6` (cycle 6 PID 23330 종료 대기 후 시작)  
+**예상 소요 시간**: 각 국가 15-30분, 총 1.5-2.5시간  
+**중요**: DB 쓰기 충돌 방지를 위해 반드시 순차 실행, 병렬 금지
+
+사용자 요청 (2026-04-16): "현재 작업이 완료되면, 다른 국가들도 해보자... wiki를 생성해서 볼트에 위치시켜줘. autopilot"
+
+---
+
 ## Cycle 3 — Full fresh run + 중대 버그 발견 (2026-04-15)
 
 **Run ID**: `69c25e2f` (실행 22:17 ~ 22:44, **BUGGY RESULT**)  
