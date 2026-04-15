@@ -132,3 +132,50 @@ tobacco_regulation (country=Germany) 파이프라인의 반복 품질 개선 로
 
 ---
 
+## Cycle 3 — Full fresh run + 중대 버그 발견 (2026-04-15)
+
+**Run ID**: `69c25e2f` (실행 22:17 ~ 22:44, **BUGGY RESULT**)  
+**Prompt version**: v2 (코드 변경 없음)
+
+**실행 조건**: `--force-rebuild` + layer1 fresh (resume 없음)
+
+### Scores
+
+| Layer | iter1 | iter2 | iter3 | Final | Status |
+|---|---|---|---|---|---|
+| layer1 | **81.8** | 80.3 | 76.1 | 81.8 | max_iterations (rollback from iter1) |
+| layer2 | 78.8 | **81.3** | — | 81.3 | converged |
+| layer3 | 58.3 | 62.3 | **67.1** | 67.1 | max_iterations |
+
+### 🚨 중대 버그 발견
+
+**문제**: Layer2/3이 Germany 필터와 무관한 문서를 읽고 claim 생성
+- Layer2 입력: `독일_KTG__Regulatory_Survey_Germany.md` (1개)
+- Layer2 실제 claims: 7개 전부 **인도네시아** (`인도네시아_KTG Regulatory Survey - Indonesia ABNR`)
+- Layer3 입력: `(규제준수)_독일 Negative list 물질 확인_육동민.md`
+- Layer3 실제 claims: 13개 **나이지리아/헝가리** 사례
+
+**원인**: Codex가 sandbox에서 vault 전체에 read 권한 있어서, `_codex_doc_list.md`의 공식 목록을 무시하고 다른 국가 문서를 자유롭게 읽음. 프롬프트에 "목록 외 파일 금지" 명시가 없었음.
+
+**증거**: `69c25e2f/layer2/iter_1/codex_map_claims.json` 모든 claim이 Indonesia doc_id
+
+### Cycle 3 최종 상태
+
+- 최종 wiki는 **완전히 오염된 상태** (인도네시아 + 나이지리아 내용 섞임)
+- 구조/헤딩은 올바름 (33/33)
+- Footnote는 3개만 (layer2/3이 잘못된 소스라 dedup 후 합쳐지지 않음)
+- **최종 wiki 사용 불가**
+
+### Cycle 3 fixes (cycle 4용)
+
+- **3-bugfix-1**: `CODEX_MAP_PROMPT_TEMPLATE`에 "⚠️ 절대 규칙: 파일 접근 제한" 섹션 추가
+  - "오직 위 목록 파일에 나열된 문서만 읽을 수 있습니다"
+  - "ls, find, grep, cat 등으로 목록에 없는 파일을 찾거나 읽지 마세요"
+  - "목록 외 파일에서 나온 claim을 반환하면 전체 출력이 실패로 간주됩니다"
+- **3-bugfix-2**: `ChunkedSynthesizer._map`에 런타임 방어 필터 — Codex가 반환한 claim의 doc_id가 docs 파라미터와 일치하지 않으면 drop
+  - basename / vault-relative / substring 매칭으로 너그럽게 검사
+  - 필터링된 개수 WARNING 로그
+
+---
+
+

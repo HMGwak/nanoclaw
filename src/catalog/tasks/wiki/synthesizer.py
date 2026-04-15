@@ -183,6 +183,17 @@ CODEX_MAP_PROMPT_TEMPLATE = """\
 문서 경로 목록:
 {doc_listing}
 
+## ⚠️ 절대 규칙: 파일 접근 제한
+
+- **오직 위 목록 파일에 나열된 문서만 읽을 수 있습니다.**
+- `ls`, `find`, `grep`, `cat` 등으로 **목록에 없는 파일을 찾거나 읽지 마세요.**
+- 다른 국가 문서, 다른 주제 문서, 관련 자료를 "보강"하기 위해 vault를 탐색하지 마세요.
+- 목록에 나열된 `{doc_count}`개 문서 이외에서 나온 내용은 **즉시 폐기**해야 합니다.
+- 모든 claim의 `doc_id`는 **반드시** 위 목록에 있는 파일 경로와 정확히 일치해야 합니다.
+- 목록 외 파일에서 나온 claim을 반환하면 전체 출력이 실패로 간주됩니다.
+
+**이 제한의 이유**: wiki 생성 파이프라인은 country/filter 기준으로 사전에 문서를 선별합니다. 사용자가 지정한 국가와 무관한 문서를 읽으면 잘못된 국가의 정보가 섞여 결과를 오염시킵니다.
+
 # 계층적 오케스트레이션 전략
 
 ## Level 1: 최상위 오케스트레이터 (당신)
@@ -727,6 +738,57 @@ class ChunkedSynthesizer:
 
         claims = claims_data.get("claims", [])
         logger.info("Codex MAP: %d claims", len(claims))
+
+        # Defensive filter: Codex has a sandbox with full read access to the
+        # vault and has been observed ignoring the doc_list_file and reading
+        # other documents (e.g. using Germany Law Review in the list but
+        # returning claims sourced from the Indonesia/Nigeria files).
+        # Drop any claim whose doc_id does not correspond to a file in the
+        # caller-supplied docs list. Matching is tolerant: we compare by
+        # basename, by vault-relative path, and by substring so that both
+        # full-path and short doc_id formats are accepted.
+        allowed_basenames = {p.name for p in docs}
+        allowed_relatives: set[str] = set()
+        for p in docs:
+            try:
+                if self._vault_root:
+                    allowed_relatives.add(str(p.relative_to(self._vault_root)))
+            except ValueError:
+                pass
+            allowed_relatives.add(str(p))
+
+        def _doc_id_is_allowed(doc_id: object) -> bool:
+            if not isinstance(doc_id, str) or not doc_id:
+                return False
+            # Accept semicolon-joined multi-doc ids (synthesizer convention)
+            for token in doc_id.split(";"):
+                token = token.strip()
+                if not token:
+                    continue
+                if token in allowed_relatives:
+                    return True
+                base = Path(token).name
+                if base in allowed_basenames:
+                    return True
+                # Also accept the stem of the token matching a caller-provided
+                # doc stem (useful for short ids like "L00013" vs "L00013 ....md")
+                stem = base
+                for allowed in allowed_basenames:
+                    if allowed.startswith(stem) or stem in allowed:
+                        return True
+            return False
+
+        original_count = len(claims)
+        claims = [c for c in claims if _doc_id_is_allowed(c.get("doc_id"))]
+        dropped = original_count - len(claims)
+        if dropped:
+            logger.warning(
+                "Codex MAP defensive filter dropped %d/%d claims with off-list doc_ids "
+                "(allowed basenames: %s)",
+                dropped,
+                original_count,
+                sorted(allowed_basenames)[:5],
+            )
 
         # 문서별 처리 로그 수집 (per-doc JSON files → merged log)
         if doc_log_dir.exists() and cache_dir:
