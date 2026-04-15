@@ -9,6 +9,9 @@ store/
 data/
 logs/
 
+# Wiki Codex MAP isolated sandbox directories (staged per-run doc sets)
+tmp/
+
 # Groups - only track base structure and specific AGENTS.md files
 groups/*
 !groups/main/

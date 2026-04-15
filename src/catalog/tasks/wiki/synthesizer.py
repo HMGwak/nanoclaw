@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 import time
@@ -654,191 +655,220 @@ class ChunkedSynthesizer:
                 except Exception:
                     pass
 
-        # 문서 경로 목록을 파일로 저장 (프롬프트 크기를 문서 수와 무관하게 유지)
-        # sandbox cwd=vault_root이므로, doc_list 파일도 vault_root 아래에 있어야 접근 가능
-        if self._vault_root:
-            doc_list_dir = self._vault_root / ".codex_tmp"
-            doc_list_dir.mkdir(parents=True, exist_ok=True)
-            doc_list_file = doc_list_dir / "_codex_doc_list.md"
-        elif cache_dir:
-            doc_list_file = cache_dir / "_codex_doc_list.md"
-        else:
-            doc_list_file = Path("/tmp/_codex_doc_list.md")
-        doc_list_file.parent.mkdir(parents=True, exist_ok=True)
-        relative_paths: list[str] = []
-        for p in docs:
-            try:
-                relative_paths.append(
-                    str(p.relative_to(self._vault_root)) if self._vault_root else str(p)
-                )
-            except ValueError:
-                relative_paths.append(str(p))
-        doc_list_file.write_text(
-            "\n".join(f"- [ ] {rp}" for rp in relative_paths), encoding="utf-8"
+        # Isolated sandbox directory. Codex has shell access under its cwd
+        # and would otherwise discover unrelated files in the vault via
+        # `ls`/`find`/`grep`. We stage the caller-supplied docs into a
+        # fresh tmp directory under the nanoclaw repo and pass that as
+        # cwd, so Codex's relative-path navigation can only reach the
+        # files we actually want it to read.
+        #
+        # Files are copied (not symlinked) so that realpath() cannot
+        # escape back to the original vault location. Names are kept as
+        # basenames because the current layers have no basename
+        # collisions; fall back to an index prefix if one ever occurs.
+        nanoclaw_root = Path(__file__).resolve().parents[4]
+        sandbox_root = (
+            nanoclaw_root
+            / "tmp"
+            / f"codex_map_{int(time.time())}_{os.getpid()}"
         )
+        sandbox_root.mkdir(parents=True, exist_ok=True)
 
-        # 문서별 처리 로그 디렉토리
-        doc_log_dir = doc_list_file.parent / "_codex_map_log"
+        # sandbox_name → original Path, so we can rewrite doc_id after
+        # Codex returns. `docs` is the authoritative whitelist.
+        sandbox_docs: dict[str, Path] = {}
+        for i, src in enumerate(docs, start=1):
+            if not src.exists():
+                logger.warning("Codex MAP: source doc missing, skipping: %s", src)
+                continue
+            base = src.name
+            sb_name = base if base not in sandbox_docs else f"{i:03d}_{base}"
+            dst = sandbox_root / sb_name
+            try:
+                dst.write_bytes(src.read_bytes())
+                sandbox_docs[sb_name] = src
+            except OSError as exc:
+                logger.warning(
+                    "Codex MAP: failed to stage %s into sandbox: %s", src, exc
+                )
+
+        if not sandbox_docs:
+            logger.error("Codex MAP: no docs staged in sandbox, aborting")
+            shutil.rmtree(sandbox_root, ignore_errors=True)
+            return []
+
+        doc_list_file = sandbox_root / "_codex_doc_list.md"
+        doc_list_file.write_text(
+            "\n".join(f"- [ ] {name}" for name in sandbox_docs), encoding="utf-8"
+        )
+        doc_log_dir = sandbox_root / "_codex_map_log"
         doc_log_dir.mkdir(parents=True, exist_ok=True)
 
         prompt_template = self._extract_prompt_override or CODEX_MAP_PROMPT_TEMPLATE
+        # Inside the sandbox cwd, paths are plain basenames. Give Codex
+        # the relative path to the list file so it does not wander.
         prompt = prompt_template.format(
-            doc_count=len(docs),
-            doc_listing=f"문서 경로 목록은 아래 파일에 한 줄에 하나씩 저장되어 있습니다. cat으로 읽으세요:\n{doc_list_file.resolve()}",
-            doc_log_dir=str(doc_log_dir.resolve()),
+            doc_count=len(sandbox_docs),
+            doc_listing=(
+                "문서 경로 목록은 현재 작업 디렉토리의 `_codex_doc_list.md` "
+                "파일에 한 줄에 하나씩 저장되어 있습니다. `cat _codex_doc_list.md`로 읽으세요. "
+                "목록에 있는 파일명은 작업 디렉토리 기준 단순 basename이며, "
+                "`cat <파일명.md>`로 바로 읽을 수 있습니다."
+            ),
+            doc_log_dir="_codex_map_log",
         )
 
         logger.info(
-            "Codex MAP: %d docs 전송 (cwd=%s, doc_list=%s)...",
-            len(docs),
-            str(self._vault_root) if self._vault_root else "project",
-            doc_list_file,
+            "Codex MAP: %d docs 전송 (sandbox=%s)...",
+            len(sandbox_docs),
+            sandbox_root,
         )
         start = time.time()
 
-        result = run_codex_prompt(
-            prompt=prompt,
-            cwd=str(self._vault_root) if self._vault_root else str(Path.cwd()),
-            reasoning_effort="high",
-            output_schema=CODEX_MAP_CLAIM_SCHEMA,
-        )
-
-        # 임시 파일 삭제
-        doc_list_file.unlink(missing_ok=True)
-        if self._vault_root:
-            try:
-                (self._vault_root / ".codex_tmp").rmdir()
-            except OSError:
-                pass  # not empty or already removed
-
-        elapsed = time.time() - start
-        logger.info("Codex MAP 완료: %.1fs (ok=%s)", elapsed, result["ok"])
-
-        if not result["ok"]:
-            logger.error("Codex MAP failed: %s", result["message"])
-            return []
-
-        # 응답 파싱 (디버그: raw output 로깅)
-        raw_output = result.get("output", "")
-        logger.info("Codex MAP raw output (first 1000 chars): %.1000s", raw_output)
-        claims_data = self._parse_codex_response(raw_output)
-        if claims_data is None:
-            logger.error("Codex MAP response is not valid JSON")
-            return []
-
-        # FILE_ACCESS_DENIED 감지
-        if claims_data.get("error") == "FILE_ACCESS_DENIED":
-            failed = claims_data.get("failed_files", [])
-            logger.error(
-                "Codex MAP: FILE_ACCESS_DENIED — %d files. Check sandbox cwd. Failed: %s",
-                len(failed),
-                failed[:5],
+        # From this point on, the sandbox tmp directory MUST be removed
+        # regardless of how we exit (success, parse error, no claims,
+        # exception). All subsequent returns are routed through the
+        # finally block at the end of this method.
+        try:
+            result = run_codex_prompt(
+                prompt=prompt,
+                cwd=str(sandbox_root),
+                reasoning_effort="high",
+                output_schema=CODEX_MAP_CLAIM_SCHEMA,
             )
-            return []
 
-        claims = claims_data.get("claims", [])
-        logger.info("Codex MAP: %d claims", len(claims))
+            elapsed = time.time() - start
+            logger.info("Codex MAP 완료: %.1fs (ok=%s)", elapsed, result["ok"])
 
-        # Defensive filter: Codex has a sandbox with full read access to the
-        # vault and has been observed ignoring the doc_list_file and reading
-        # other documents (e.g. using Germany Law Review in the list but
-        # returning claims sourced from the Indonesia/Nigeria files).
-        # Drop any claim whose doc_id does not correspond to a file in the
-        # caller-supplied docs list. Matching is tolerant: we compare by
-        # basename, by vault-relative path, and by substring so that both
-        # full-path and short doc_id formats are accepted.
-        allowed_basenames = {p.name for p in docs}
-        allowed_relatives: set[str] = set()
-        for p in docs:
-            try:
-                if self._vault_root:
-                    allowed_relatives.add(str(p.relative_to(self._vault_root)))
-            except ValueError:
-                pass
-            allowed_relatives.add(str(p))
+            if not result["ok"]:
+                logger.error("Codex MAP failed: %s", result["message"])
+                return []
 
-        def _doc_id_is_allowed(doc_id: object) -> bool:
-            if not isinstance(doc_id, str) or not doc_id:
-                return False
-            # Accept semicolon-joined multi-doc ids (synthesizer convention)
-            for token in doc_id.split(";"):
-                token = token.strip()
-                if not token:
+            # 응답 파싱 (디버그: raw output 로깅)
+            raw_output = result.get("output", "")
+            logger.info(
+                "Codex MAP raw output (first 1000 chars): %.1000s", raw_output
+            )
+            claims_data = self._parse_codex_response(raw_output)
+            if claims_data is None:
+                logger.error("Codex MAP response is not valid JSON")
+                return []
+
+            # FILE_ACCESS_DENIED 감지
+            if claims_data.get("error") == "FILE_ACCESS_DENIED":
+                failed = claims_data.get("failed_files", [])
+                logger.error(
+                    "Codex MAP: FILE_ACCESS_DENIED — %d files. Check sandbox cwd. Failed: %s",
+                    len(failed),
+                    failed[:5],
+                )
+                return []
+
+            claims = claims_data.get("claims", [])
+            logger.info("Codex MAP: %d claims", len(claims))
+
+            # Defensive filter: Codex's sandbox cwd now contains ONLY the
+            # staged files, but absolute paths outside cwd are still
+            # technically readable. If any claim's doc_id does not map to
+            # one of the staged sandbox filenames, drop it. Also rewrite
+            # surviving claims' doc_id back to the original (vault) file's
+            # basename so downstream code (footnote wiring, Grounding
+            # rubric, etc.) sees the canonical name.
+            allowed_sandbox_names = set(sandbox_docs.keys())
+
+            def _resolve_doc_id(raw: object) -> str | None:
+                """Map a Codex-returned doc_id to its sandbox filename, or None."""
+                if not isinstance(raw, str) or not raw:
+                    return None
+                for token in raw.split(";"):
+                    token = token.strip()
+                    if not token:
+                        continue
+                    base = Path(token).name
+                    if base in allowed_sandbox_names:
+                        return base
+                    # Tolerate stem-only ids (e.g. "L00013" vs "L00013 Tobacco...md").
+                    for sb_name in allowed_sandbox_names:
+                        if sb_name.startswith(base) or base in sb_name:
+                            return sb_name
+                return None
+
+            original_count = len(claims)
+            cleaned: list[dict] = []
+            for c in claims:
+                resolved = _resolve_doc_id(c.get("doc_id"))
+                if resolved is None:
                     continue
-                if token in allowed_relatives:
-                    return True
-                base = Path(token).name
-                if base in allowed_basenames:
-                    return True
-                # Also accept the stem of the token matching a caller-provided
-                # doc stem (useful for short ids like "L00013" vs "L00013 ....md")
-                stem = base
-                for allowed in allowed_basenames:
-                    if allowed.startswith(stem) or stem in allowed:
-                        return True
-            return False
+                original = sandbox_docs[resolved]
+                c["doc_id"] = original.name
+                cleaned.append(c)
+            claims = cleaned
+            dropped = original_count - len(claims)
+            if dropped:
+                logger.warning(
+                    "Codex MAP defensive filter dropped %d/%d claims with off-list doc_ids "
+                    "(allowed sandbox files: %s)",
+                    dropped,
+                    original_count,
+                    sorted(allowed_sandbox_names)[:5],
+                )
 
-        original_count = len(claims)
-        claims = [c for c in claims if _doc_id_is_allowed(c.get("doc_id"))]
-        dropped = original_count - len(claims)
-        if dropped:
-            logger.warning(
-                "Codex MAP defensive filter dropped %d/%d claims with off-list doc_ids "
-                "(allowed basenames: %s)",
-                dropped,
-                original_count,
-                sorted(allowed_basenames)[:5],
-            )
-
-        # 문서별 처리 로그 수집 (per-doc JSON files → merged log)
-        if doc_log_dir.exists() and cache_dir:
-            doc_log_entries = []
-            for log_file in doc_log_dir.glob("*.json"):
-                try:
-                    entry = json.loads(log_file.read_text(encoding="utf-8"))
-                    doc_log_entries.append(entry)
-                except (json.JSONDecodeError, OSError):
-                    doc_log_entries.append(
-                        {
-                            "doc": log_file.stem,
-                            "claims": -1,
-                            "reason": "log parse error",
-                        }
+            # 문서별 처리 로그 수집 (per-doc JSON files → merged log)
+            if doc_log_dir.exists() and cache_dir:
+                doc_log_entries = []
+                for log_file in doc_log_dir.glob("*.json"):
+                    try:
+                        entry = json.loads(log_file.read_text(encoding="utf-8"))
+                        doc_log_entries.append(entry)
+                    except (json.JSONDecodeError, OSError):
+                        doc_log_entries.append(
+                            {
+                                "doc": log_file.stem,
+                                "claims": -1,
+                                "reason": "log parse error",
+                            }
+                        )
+                if doc_log_entries:
+                    doc_log_dest = cache_dir / "codex_map_doc_log.json"
+                    doc_log_dest.write_text(
+                        json.dumps(doc_log_entries, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
                     )
-            if doc_log_entries:
-                doc_log_dest = cache_dir / "codex_map_doc_log.json"
-                doc_log_dest.write_text(
-                    json.dumps(doc_log_entries, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                skipped = sum(1 for d in doc_log_entries if d.get("claims", 0) == 0)
-                logger.info(
-                    "Codex MAP doc log: %d entries (%d with claims, %d skipped) → %s",
-                    len(doc_log_entries),
-                    len(doc_log_entries) - skipped,
-                    skipped,
-                    doc_log_dest,
-                )
-            else:
-                logger.warning("Codex MAP doc log directory is empty")
-            # 로그 디렉토리 정리
-            shutil.rmtree(doc_log_dir, ignore_errors=True)
+                    skipped = sum(
+                        1 for d in doc_log_entries if d.get("claims", 0) == 0
+                    )
+                    logger.info(
+                        "Codex MAP doc log: %d entries (%d with claims, %d skipped) → %s",
+                        len(doc_log_entries),
+                        len(doc_log_entries) - skipped,
+                        skipped,
+                        doc_log_dest,
+                    )
+                else:
+                    logger.warning("Codex MAP doc log directory is empty")
 
-        if not claims:
-            logger.error("Codex MAP produced 0 claims from %d docs", len(docs))
-            return []
+            if not claims:
+                logger.error("Codex MAP produced 0 claims from %d docs", len(docs))
+                return []
 
-        # 캐시 저장
-        if cache_file:
-            try:
-                cache_file.write_text(
-                    json.dumps(claims_data, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-            except Exception:
-                logger.warning("Failed to write Codex MAP cache")
+            # Update claims_data with the filtered/rewritten claims so the
+            # cache and downstream extractions stay consistent with what we
+            # actually returned.
+            claims_data["claims"] = claims
 
-        return self._claims_to_extractions(claims_data, docs)
+            # 캐시 저장
+            if cache_file:
+                try:
+                    cache_file.write_text(
+                        json.dumps(claims_data, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                except Exception:
+                    logger.warning("Failed to write Codex MAP cache")
+
+            return self._claims_to_extractions(claims_data, docs)
+        finally:
+            shutil.rmtree(sandbox_root, ignore_errors=True)
 
     @staticmethod
     def _parse_codex_response(output: str) -> dict | None:
