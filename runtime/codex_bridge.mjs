@@ -166,15 +166,27 @@ async function probeExec() {
     const localCodexCliPath = codexPath();
 
     // Build args for `codex exec`.
+    //
     // On Linux/Docker we still need --dangerously-bypass-approvals-and-sandbox
     // because Codex's internal bwrap cannot open a new namespace when spawned
     // from inside another subprocess (Docker or NanoClaw's worker pool).
+    //
     // On macOS the bypass is not needed — Codex uses the native Seatbelt
     // sandbox, and OpenAI's own docs mark the bypass flag as "dangerous, only
-    // for already-isolated runners". Leaving it off lets Codex's built-in
-    // approval/sandbox layer run normally.
+    // for already-isolated runners". We explicitly request workspace-write so
+    // the agent can:
+    //   - READ files inside the cwd (the staged tmp/ sandbox)
+    //   - WRITE within the cwd (progress logs, doc list updates)
+    //   - Not read arbitrary absolute paths outside the cwd (the whole reason
+    //     we staged docs in the first place)
+    // Reads outside the workspace will be denied at the kernel level by
+    // Seatbelt, which closes the "Codex wandered into the vault" bug.
+    // --ephemeral skips persistent session files so Codex does not try to
+    // write into the isolated CODEX_HOME's history store for every invocation.
     const args = ["exec", "--skip-git-repo-check"];
-    if (!IS_MACOS) {
+    if (IS_MACOS) {
+      args.push("-s", "workspace-write", "--ephemeral");
+    } else {
       args.splice(1, 0, "--dangerously-bypass-approvals-and-sandbox");
     }
     if (model) args.push("-m", model);
