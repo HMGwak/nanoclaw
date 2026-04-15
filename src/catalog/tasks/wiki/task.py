@@ -38,11 +38,15 @@ try:
         md_to_json,
         json_to_md,
         apply_json_diffs,
+        compute_preservation_stats,
         MdNode,
         MdDiff,
         strip_code_blocks,
         filter_attachment_footnotes,
+        merge_missing_footnote_definitions,
+        dedup_footnotes_by_source,
         canonicalize_regulation_markdown,
+        apply_generated_frontmatter,
         preserve_canonical_subtrees,
     )
 except ImportError:
@@ -61,11 +65,15 @@ except ImportError:
         md_to_json,
         json_to_md,
         apply_json_diffs,
+        compute_preservation_stats,
         MdNode,
         MdDiff,
         strip_code_blocks,
         filter_attachment_footnotes,
+        merge_missing_footnote_definitions,
+        dedup_footnotes_by_source,
         canonicalize_regulation_markdown,
+        apply_generated_frontmatter,
         preserve_canonical_subtrees,
     )  # type: ignore[no-redef]
 
@@ -298,23 +306,26 @@ Rules:
 3. Every improvement MUST include a raw source footnote citation.
 4. Do NOT use defensive hedging phrases (e.g., "사례 문서에서 직접 확인된"). Write direct factual sentences.
 5. Replace long comma-separated item chains (5+ items) with grouped bullet/sub-bullet structure.
-6. Reduce country/region section depth imbalance; if evidence is limited, add one explicit limitation bullet with citation.
+6. If a section lacks source-grounded evidence, LEAVE THE CANONICAL EMPTY MARKER AS-IS. Do NOT invent content to
+   match sibling section length. Sibling sections having different depth is acceptable when sources differ in scope.
 7. Do NOT use markdown tables (| |). Use grouped bullet lists instead.
+8. NEVER use "delete" to improve any metric score. Deleting content always makes Coverage and Actionability worse.
+   If you must update a node, you MUST preserve all existing relevant text and only add or reformat.
 
 The existing wiki is provided as a JSON node array. Each node has {id, type, content, parent, indent}.
 
 Respond ONLY with a JSON array of diffs:
 [
-  {"action": "update", "id": 3, "content": "revised content"},
-  {"action": "insert_after", "id": 7, "type": "paragraph", "parent": 2, "content": "new paragraph"},
-  {"action": "append_child", "parent": 5, "type": "list", "indent": 0, "content": "new item[^4]"},
-  {"action": "delete", "id": 10}
+  {"action": "update", "id": 3, "content": "기존 문장 내용입니다.[^1]"},
+  {"action": "insert_after", "id": 7, "type": "paragraph", "parent": 2, "content": "새로운 문장입니다.[^2]"},
+  {"action": "append_child", "parent": 5, "type": "list", "indent": 0, "content": "새로운 항목[^3]"}
 ]
 
 Rules:
 - Target nodes by id (NOT by line number or text matching).
 - Only include diffs for parts that need changes.
-- Preserve existing structure as much as possible, but reorganize overloaded comma-lists into bullets/sub-bullets when needed.
+- Preserve existing structure as much as possible.
+- When using "update", you must include the full original text of the node in the "content" field, plus the new citations or minor edits.
 - Write ALL content values in Korean.
 """
 
@@ -323,7 +334,11 @@ REVISE_SYSTEM_PROMPT_IMPROVE = (
     + """\
 Current goal: Improve weak areas.
 Improve items in order from lowest score to highest to raise overall quality.
-Prioritize fixes for: (1) long comma-chain listings, (2) repetitive defensive phrasing, (3) country/region section depth imbalance.
+Prioritize fixes for: (1) long comma-chain listings, (2) repetitive defensive phrasing, (3) missing citations on existing sentences.
+
+In this mode, "delete" is ONLY allowed for removing duplicate headings or structurally broken nodes.
+
+Do NOT add filler content to balance section length. If a canonical subsection has no grounded content in the sources, the empty marker is the correct output — do not invent facts to pad it.
 """
 )
 
@@ -331,7 +346,13 @@ REVISE_SYSTEM_PROMPT_FIX_GATE = (
     REVISE_BASE_INSTRUCTIONS
     + """\
 Current goal: Pass hard gates.
-Fix failed gate items first. Use minimal changes to meet the requirements.
+Fix ONLY the failed gates. Do NOT touch sections that are already passing.
+
+Gate-specific remediation (read carefully):
+- Citation Ratio gate: The ratio is (cited sentences) / (total sentences). To raise it, use "update" to ADD [^N] footnotes to existing uncited sentences. You must keep the original text of the sentence exactly as it is and just append the footnote marker. Never delete sentences.
+- Markdown Formatting gate: Use "update" to fix indentation levels, footnote syntax ([^N] not [[N]]), or broken list structure. Do NOT delete content nodes.
+
+In this mode, the "delete" action is strictly forbidden.
 """
 )
 
@@ -374,6 +395,7 @@ class WikiTask:
         wiki_output_dir = context.config.get("wiki_output_dir")
         if not wiki_output_dir:
             raise ValueError("wiki_output_dir is required in context_config")
+        output_name = context.config.get("output_name") or f"{domain}.md"
 
         # 1. Discover inputs (or use pre-filtered docs)
         prefilled = context.config.get("prefilled_docs")
@@ -395,8 +417,12 @@ class WikiTask:
             all_docs = all_docs[:max_docs]
 
         # 2. Track changes
-        tracker = WikiTracker()
-        new, changed, unchanged = tracker.classify_docs(all_docs)
+        force_rebuild = bool(context.config.get("force_rebuild"))
+        if force_rebuild:
+            new, changed, unchanged = all_docs, [], []
+        else:
+            tracker = WikiTracker()
+            new, changed, unchanged = tracker.classify_docs(all_docs)
 
         # 3. Early exit if no changes
         docs_to_process = new + changed
@@ -406,29 +432,14 @@ class WikiTask:
                 domain,
                 len(unchanged),
             )
-            existing_wiki = self._load_existing_wiki(
-                context.reference_files, domain, wiki_output_dir
-            )
-            if existing_wiki:
-                context.output_dir.mkdir(parents=True, exist_ok=True)
-                out_path = context.output_dir / f"{domain}.md"
-                out_path.write_text(existing_wiki, encoding="utf-8")
-                return RunResult(
-                    output_files=[out_path],
-                    metadata={
-                        "domain": domain,
-                        "wiki_output_dir": wiki_output_dir,
-                        "skipped": True,
-                        "reason": "no_changes",
-                        "unchanged_count": len(unchanged),
-                    },
-                )
             return RunResult(
                 output_files=[],
                 metadata={
                     "domain": domain,
+                    "wiki_output_dir": wiki_output_dir,
                     "skipped": True,
-                    "reason": "no_changes_no_existing",
+                    "reason": "no_changes",
+                    "unchanged_count": len(unchanged),
                 },
             )
 
@@ -441,9 +452,7 @@ class WikiTask:
             extract_prompt_override=context.config.get("spec_extract_prompt"),
             compose_prompt_override=context.config.get("spec_compose_prompt"),
         )
-        existing_wiki = self._load_existing_wiki(
-            context.reference_files, domain, wiki_output_dir
-        )
+        existing_wiki = self._load_existing_wiki(context.reference_files, output_name)
         wiki_content, succeeded_docs = synthesizer.synthesize(
             docs_to_process, existing_wiki, domain, cache_dir=context.output_dir
         )
@@ -464,9 +473,13 @@ class WikiTask:
             )
 
         # 4. Save (DB tracking deferred to engine after keep/converged verdict)
-        # Domain lock: only write {domain}.md, never touch other domain files
+        wiki_content = apply_generated_frontmatter(
+            wiki_content,
+            domain=domain,
+            filter_expr=requested_filter_expr,
+        )
         context.output_dir.mkdir(parents=True, exist_ok=True)
-        allowed_filename = f"{domain}.md"
+        allowed_filename = output_name
         out_path = context.output_dir / allowed_filename
         assert out_path.name == allowed_filename, (
             f"Domain lock violation: expected {allowed_filename}, got {out_path.name}"
@@ -547,16 +560,33 @@ class WikiTask:
 
     def revise(self, context, feedback) -> RunResult:
         """Revise wiki notes via heading-path based sections (not line diffs)."""
+        from catalog.tasks.wiki.markdown_utils import (
+            preserve_canonical_subtrees as _preserve_canonical_subtrees,
+        )
+
         output_files: list[Path] = []
 
-        system_prompt = context.config.get(
-            "spec_revise_prompt"
-        ) or self._select_revise_prompt(feedback)
-
+        gate_only = bool(feedback.hard_gate_failures)
+        spec_revise_prompt = context.config.get("spec_revise_prompt")
+        if spec_revise_prompt:
+            if gate_only:
+                # spec_revise_prompt가 있어도 hard gate 실패 시 gate 제약을 앞에 강제 삽입
+                gate_preamble = (
+                    "HARD GATE FAILURE — The following constraints override all other instructions:\n"
+                    "- Citation Ratio gate: Use 'update' to ADD [^N] footnotes to existing uncited sentences. "
+                    "NEVER delete sentences or nodes to improve citation ratio.\n"
+                    "- Markdown Formatting gate: Fix format issues only with 'update'. Do NOT delete content.\n"
+                    "- The 'delete' action is strictly forbidden in this revision pass.\n\n"
+                )
+                system_prompt = gate_preamble + spec_revise_prompt
+            else:
+                system_prompt = spec_revise_prompt
+        else:
+            system_prompt = self._select_revise_prompt(feedback)
         for prev_file in feedback.previous_output_files:
             existing_wiki = prev_file.read_text(encoding="utf-8")
             revision_prompt = self._build_revision_prompt(
-                existing_wiki, feedback, context.reference_files
+                existing_wiki, feedback, context.reference_files, gate_only=gate_only
             )
 
             diff_response = self.agent.generate(
@@ -566,14 +596,16 @@ class WikiTask:
 
             # Apply JSON node diffs to existing wiki
             revised = self._apply_section_diffs(
-                existing_wiki, diff_response, existing_wiki
+                existing_wiki, diff_response, existing_wiki, gate_only=gate_only
             )
             revised = strip_code_blocks(revised)
             revised = filter_attachment_footnotes(revised)
             revised = canonicalize_regulation_markdown(
                 revised, context.config.get("doc_structure")
             )
-            revised = preserve_canonical_subtrees(revised, existing_wiki)
+            revised = _preserve_canonical_subtrees(revised, existing_wiki)
+            revised = merge_missing_footnote_definitions(revised, existing_wiki)
+            revised = dedup_footnotes_by_source(revised)
 
             out_path = context.output_dir / prev_file.name
             out_path.write_text(revised, encoding="utf-8")
@@ -607,9 +639,25 @@ class WikiTask:
         return REVISE_SYSTEM_PROMPT_IMPROVE
 
     def _apply_section_diffs(
-        self, original: str, response: str, reference_wiki: str | None = None
+        self,
+        original: str,
+        response: str,
+        reference_wiki: str | None = None,
+        *,
+        gate_only: bool = False,
     ) -> str:
-        """Apply JSON node diffs from LLM response."""
+        """Apply JSON node diffs from LLM response.
+
+        When ``gate_only=True`` the reviser is running against a hard-gate
+        failure. In that mode we (a) block ``delete`` and blanking-update
+        operations at the engine level, and (b) run a preservation guard
+        that rejects the entire diff batch if it would catastrophically
+        shrink the document (heading-only skeleton pattern).
+        """
+        from catalog.tasks.wiki.markdown_utils import (
+            preserve_canonical_subtrees as _preserve_canonical_subtrees,
+        )
+
         nodes = md_to_json(original)
         try:
             diffs = parse_validated_list(response, MdDiff)
@@ -626,43 +674,55 @@ class WikiTask:
                 response,
             )
             return original
-        logger.info("Applying %d MdDiff operations", len(diffs))
-        updated = apply_json_diffs(nodes, diffs)
+
+        logger.info(
+            "Applying %d MdDiff operations (gate_only=%s)", len(diffs), gate_only
+        )
+        updated = apply_json_diffs(
+            nodes,
+            diffs,
+            allow_delete=not gate_only,
+            allow_blank_update=not gate_only,
+        )
+
+        # Preservation guard: reject the entire revise if it nuked content.
+        # Thresholds chosen so that normal "add a few footnotes" revises
+        # pass but "empty out every section" revises are rolled back.
+        before = compute_preservation_stats(nodes)
+        after = compute_preservation_stats(updated)
+        non_empty_floor = int(before["non_empty_count"] * 0.7)
+        bytes_floor = int(before["total_bytes"] * 0.6)
+        if (
+            before["non_empty_count"] > 0
+            and after["non_empty_count"] < non_empty_floor
+        ) or (
+            before["total_bytes"] > 0 and after["total_bytes"] < bytes_floor
+        ):
+            logger.warning(
+                "Preservation guard REJECTED revise: non_empty %d→%d (floor %d), "
+                "bytes %d→%d (floor %d). Keeping original.",
+                before["non_empty_count"],
+                after["non_empty_count"],
+                non_empty_floor,
+                before["total_bytes"],
+                after["total_bytes"],
+                bytes_floor,
+            )
+            return original
+
         updated_md = json_to_md(updated)
         updated_md = canonicalize_regulation_markdown(updated_md, None)
-        return preserve_canonical_subtrees(updated_md, reference_wiki or original)
+        return _preserve_canonical_subtrees(updated_md, reference_wiki or original)
 
     def _load_existing_wiki(
         self,
         reference_files: list[Path],
-        domain: str,
-        wiki_output_dir: str | None = None,
+        output_name: str,
     ) -> str | None:
-        """Find and return the existing wiki note for domain.
-
-        Priority: DB output_path → reference_files → wiki_output_dir/{domain}.md.
-        """
-        # 1. Try DB — latest completed run's output
-        try:
-            tracker = WikiTracker()
-            db_path = tracker.get_latest_wiki_path(domain)
-            if db_path and db_path.exists():
-                logger.info("Loading existing wiki from DB: %s", db_path)
-                return db_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
-
-        # 2. Fallback to reference_files
+        expected_name = output_name
         for ref in reference_files:
-            if ref.stem == domain and ref.suffix == ".md":
+            if ref.name == expected_name:
                 return ref.read_text(encoding="utf-8")
-
-        # 3. Fallback to wiki_output_dir/{domain}.md
-        if wiki_output_dir:
-            candidate = Path(wiki_output_dir) / f"{domain}.md"
-            if candidate.exists():
-                logger.info("Loading existing wiki from wiki_output_dir: %s", candidate)
-                return candidate.read_text(encoding="utf-8")
 
         return None
 
@@ -686,6 +746,7 @@ class WikiTask:
         content: str,
         feedback,
         reference_files: list[Path],
+        gate_only: bool = False,
     ) -> str:
         nodes = md_to_json(content)
         nodes_json = json.dumps(
@@ -698,13 +759,37 @@ class WikiTask:
             lines.append("## 하드 게이트 실패 (최우선 수정)")
             for g in feedback.hard_gate_failures:
                 lines.append(f"- {g.message}")
+                name = getattr(g, "name", "") or ""
+                measured = getattr(g, "measured", None)
+                threshold = getattr(g, "threshold", None)
+                if "Citation" in name and measured is not None and threshold is not None:
+                    need = int((threshold - measured) * 100)
+                    lines.append(
+                        f"  → 현재 인용률 {measured:.0%}, 목표 {threshold:.0%}. "
+                        f"약 {need}%p 개선 필요. "
+                        f"기존 문장에 [^N] 각주를 추가하는 'update' diff만 사용할 것. "
+                        f"문장/노드 삭제 절대 금지."
+                    )
+                elif "Markdown" in name or "Formatting" in name:
+                    lines.append(
+                        f"  → 들여쓰기, 각주 형식([^N]), 리스트 구조 오류만 'update'로 수정. "
+                        f"내용 삭제 금지."
+                    )
 
-        lines.append("\n## 항목별 피드백 (점수 낮은 순)")
-        for item in feedback.items:
-            lines.append(f"### {item.name} ({item.score}/{item.max_score})")
-            lines.append(f"근거: {item.rationale}")
-            for imp in item.improvements:
-                lines.append(f"- 개선: {imp}")
+        if gate_only:
+            # FIX_GATE 모드: 다른 피드백 항목의 삭제/축소 제안이 reviser를 혼동시키지 않도록 제외
+            lines.append(
+                "\n## 주의\n"
+                "이번 수정은 위 하드 게이트 항목만 고친다. "
+                "다른 항목(Coverage, Restraint, Actionability 등)의 개선은 게이트 통과 후 다음 iteration에서 처리한다."
+            )
+        else:
+            lines.append("\n## 항목별 피드백 (점수 낮은 순)")
+            for item in feedback.items:
+                lines.append(f"### {item.name} ({item.score}/{item.max_score})")
+                lines.append(f"근거: {item.rationale}")
+                for imp in item.improvements:
+                    lines.append(f"- 개선: {imp}")
 
         lines.append("\n## 참조 소스 (raw 문서)")
         for ref in reference_files:

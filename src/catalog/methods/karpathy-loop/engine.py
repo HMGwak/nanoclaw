@@ -557,6 +557,13 @@ def run_loop(
     result: RunResult | None = None
     first_run_metadata: dict = {}
     last_good_files: list[Path] = []
+    # Best-so-far snapshot: tracks the highest-scoring iteration output.
+    # The finalizer and subsequent revise passes pull from this snapshot
+    # instead of the most recent iteration, so a catastrophic revise can
+    # never overwrite a previously good result.
+    best_score: float | None = None
+    best_files: list[Path] = []
+    best_iteration: int = 0
     eval_output: EvalOutput | None = None
     gate_failures: list[HardGateResult] = []
 
@@ -637,8 +644,13 @@ def run_loop(
                     eval_result=eval_output,
                     rubric=rubric,
                     gate_failures=gate_failures,
-                    previous_output_files=last_good_files,
-                    previous_score=history[-2].total if len(history) >= 2 else None,
+                    # Revise operates on the best-so-far snapshot, not the most
+                    # recent iteration. If iter N-1 regressed, we rollback to the
+                    # best prior output and retry from there. previous_score is
+                    # also the best score, so recovery-mode logic in task.revise
+                    # triggers whenever the current iteration is below the best.
+                    previous_output_files=best_files or last_good_files,
+                    previous_score=best_score,
                 )
                 result = task.revise(context, feedback)
         except Exception as exc:
@@ -677,6 +689,26 @@ def run_loop(
         # Evaluate
         eval_output = evaluator.evaluate(result.output_files, reference_files)
 
+        # Update best-so-far snapshot. Ties go to the later iteration so that
+        # a convergent equal-score run uses the most recent output.
+        if best_score is None or eval_output.total >= best_score:
+            best_score = eval_output.total
+            best_files = list(result.output_files)
+            best_iteration = iteration
+            logger.info(
+                "Best snapshot updated: iteration=%d score=%.1f",
+                iteration,
+                best_score,
+            )
+        else:
+            logger.info(
+                "Iteration %d score %.1f below best %.1f (from iter %d) — will rollback for next revise",
+                iteration,
+                eval_output.total,
+                best_score,
+                best_iteration,
+            )
+
         if callbacks is not None:
             try:
                 callbacks.on_evaluation_complete(iteration, eval_output)
@@ -704,7 +736,9 @@ def run_loop(
 
         # Discard: iteration 1에서도 discard_threshold 미만이면 즉시 탈출.
         # 첫 생성 결과가 너무 낮으면 revise로 회복 불가능 (MAP 실패, 파일 접근 불가 등).
-        if eval_output.total < config.discard_threshold:
+        # best_score를 기준으로 판정하므로, 이후 반복에서 점수가 하락해도
+        # 이전 iteration이 양호했다면 discard되지 않는다 (롤백으로 보호).
+        if best_score is not None and best_score < config.discard_threshold:
             record.verdict = "discard"
             history.append(record)
             _notify_verdict(callbacks, iteration, "discard", eval_output.total)
@@ -744,17 +778,29 @@ def run_loop(
     # Finalize output
     final = history[-1] if history else None
     status = final.verdict if final else "error"
-    final_score = final.total if final else None
+    # final_score reflects the best snapshot across all iterations, not the
+    # last iteration's score. A regressive iter_N no longer sinks a good iter_M.
+    final_score = best_score if best_score is not None else (
+        final.total if final else None
+    )
 
-    # Copy final output
+    # Copy final output — always from the best snapshot, regardless of which
+    # iteration it came from. For discard we still persist the best attempt
+    # under .discarded/ so the run is inspectable.
     final_dir = output_dir / "final"
     discarded_dir = output_dir / ".discarded"
+    snapshot_files = best_files or last_good_files
 
     if status == "keep" or status == "converged" or status == "max_iterations":
         final_dir.mkdir(parents=True, exist_ok=True)
-        for f in last_good_files:
+        for f in snapshot_files:
             if f.exists():
                 shutil.copy2(f, final_dir / f.name)
+        logger.info(
+            "Final output from best iteration=%d score=%.1f",
+            best_iteration,
+            best_score if best_score is not None else 0.0,
+        )
 
         # Record to DB only after successful verdict
         if first_run_metadata.get("all_docs"):
@@ -766,7 +812,7 @@ def run_loop(
 
     elif status == "discard":
         discarded_dir.mkdir(parents=True, exist_ok=True)
-        for f in last_good_files:
+        for f in snapshot_files:
             if f.exists():
                 shutil.copy2(f, discarded_dir / f.name)
 

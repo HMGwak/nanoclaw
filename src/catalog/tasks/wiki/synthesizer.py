@@ -39,7 +39,10 @@ try:
         SectionEdit,
         strip_code_blocks,
         filter_attachment_footnotes,
+        merge_missing_footnote_definitions,
+        dedup_footnotes_by_source,
         canonicalize_regulation_markdown,
+        preserve_canonical_subtrees,
         md_to_json,
         json_to_md,
         apply_json_diffs,
@@ -53,6 +56,8 @@ except ImportError:
         SectionEdit,
         strip_code_blocks,
         filter_attachment_footnotes,
+        merge_missing_footnote_definitions,
+        dedup_footnotes_by_source,
         canonicalize_regulation_markdown,
         preserve_canonical_subtrees,
         md_to_json,
@@ -592,6 +597,7 @@ class ChunkedSynthesizer:
         wiki = strip_code_blocks(wiki)
         wiki = filter_attachment_footnotes(wiki)
         wiki = canonicalize_regulation_markdown(wiki, self.doc_structure)
+        wiki = dedup_footnotes_by_source(wiki)
 
         succeeded = list(self._succeeded_docs)
         logger.info("Successfully processed %d/%d docs", len(succeeded), len(docs))
@@ -964,6 +970,8 @@ class ChunkedSynthesizer:
             current_wiki, self.doc_structure
         )
         current_wiki = preserve_canonical_subtrees(current_wiki, existing_wiki)
+        current_wiki = merge_missing_footnote_definitions(current_wiki, existing_wiki)
+        current_wiki = dedup_footnotes_by_source(current_wiki)
         return current_wiki
 
     # ── Incremental (single-pass) synthesis ──────────────────────
@@ -1106,7 +1114,11 @@ class ChunkedSynthesizer:
         updated_md = canonicalize_regulation_markdown(
             json_to_md(updated), self.doc_structure
         )
-        return preserve_canonical_subtrees(updated_md, reference_wiki or original)
+        updated_md = preserve_canonical_subtrees(updated_md, reference_wiki or original)
+        updated_md = merge_missing_footnote_definitions(
+            updated_md, reference_wiki or original
+        )
+        return dedup_footnotes_by_source(updated_md)
 
     def _build_reduce_user_prompt(
         self, extractions: list[dict], docs: list[Path], domain: str

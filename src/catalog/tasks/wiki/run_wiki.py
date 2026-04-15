@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import json
 import logging
 import re
 import shutil
@@ -45,7 +46,7 @@ def _tree_to_headings(tree: dict) -> list[str]:
                 title = section.get("title")
                 level = section.get("level", 1)
                 if title:
-                    headings.append(f"{'#' * (level + 1)} {title}")
+                    headings.append(f"{'#' * level} {title}")
                 _walk(section)
 
     struct = tree.get("structure", tree)
@@ -58,11 +59,8 @@ def resolve_base_path(domain: str, vault_root: Path) -> Path:
     return (vault_root / DEFAULT_INDEX_ROOT / suffix).resolve()
 
 
-def resolve_wiki_output_dir(vault_root: Path, wiki_output_dir: str) -> Path:
-    target = Path(wiki_output_dir)
-    if target.is_absolute():
-        return target
-    return (vault_root / DEFAULT_WIKI_ROOT / target).resolve()
+def resolve_wiki_output_root(vault_root: Path) -> Path:
+    return (vault_root / DEFAULT_WIKI_ROOT).resolve()
 
 
 def default_run_root(vault_root: Path, domain: str) -> Path:
@@ -70,14 +68,26 @@ def default_run_root(vault_root: Path, domain: str) -> Path:
 
 
 def copy_final_output(
-    final_file: Path | None, destination_dir: Path, domain: str
+    final_file: Path | None, destination_dir: Path, output_name: str
 ) -> Path | None:
     if not final_file or not final_file.exists():
         return None
     destination_dir.mkdir(parents=True, exist_ok=True)
-    destination = destination_dir / f"{domain}.md"
+    destination = destination_dir / output_name
     shutil.copy2(final_file, destination)
     return destination
+
+
+def build_output_name(domain: str, filter_expr: str | None) -> str:
+    if not filter_expr:
+        return f"{domain}.md"
+    slug = re.sub(r"[^A-Za-z0-9가-힣]+", "_", filter_expr).strip("_")
+    slug = re.sub(r"_+", "_", slug)
+    if not slug:
+        return f"{domain}.md"
+    if len(slug) > 80:
+        slug = slug[:80].rstrip("_")
+    return f"{domain}_{slug}.md"
 
 
 def load_domain_assets(spec_path: Path, domain: str) -> dict:
@@ -104,6 +114,7 @@ def build_layer_context(
     filter_expr: str | None,
     max_docs: int | None,
     domain_assets: dict,
+    force_rebuild: bool,
 ) -> dict:
     loader = SpecLoader(spec_path=spec_path)
     base_path = resolve_base_path(domain, vault_root)
@@ -123,8 +134,10 @@ def build_layer_context(
         "base_path": str(base_path),
         "vault_root": str(vault_root),
         "wiki_output_dir": str(wiki_output_dir),
+        "output_name": build_output_name(domain, filter_expr),
         "view": view,
         "filter": filter_expr,
+        "force_rebuild": force_rebuild,
         "_parsed_evaluation_override": parsed_evaluation,
     }
     if max_docs is not None:
@@ -189,22 +202,33 @@ def dry_run_domain(
 def run_wiki(
     *,
     domain: str,
-    wiki_output_dir: str,
     filter_expr: str | None,
     vault_root: Path,
     spec_path: Path,
     model: str | None,
     max_docs: int | None,
     output_dir: Path | None,
+    resume_from_layer: str | None,
+    resume_file: Path | None,
+    force_rebuild: bool,
 ) -> Path | None:
     domain_assets = load_domain_assets(spec_path, domain)
     run_root = output_dir or default_run_root(vault_root, domain)
     run_root.mkdir(parents=True, exist_ok=True)
-    resolved_output_dir = resolve_wiki_output_dir(vault_root, wiki_output_dir)
+    resolved_output_dir = resolve_wiki_output_root(vault_root)
+    output_name = build_output_name(domain, filter_expr)
     agents = OpenAIAgents(model=model) if model else OpenAIAgents()
 
-    previous_wiki_path: Path | None = None
-    for layer in domain_assets["layers"]:
+    previous_wiki_path: Path | None = (
+        resume_file if resume_file and resume_file.exists() else None
+    )
+    layers = list(domain_assets["layers"])
+    if resume_from_layer:
+        if resume_from_layer not in layers:
+            raise ValueError(f"Unknown resume layer: {resume_from_layer}")
+        layers = layers[layers.index(resume_from_layer) :]
+
+    for layer in layers:
         layer_dir = run_root / layer
         layer_dir.mkdir(parents=True, exist_ok=True)
         context_config = build_layer_context(
@@ -216,6 +240,7 @@ def run_wiki(
             filter_expr=filter_expr,
             max_docs=max_docs,
             domain_assets=domain_assets,
+            force_rebuild=force_rebuild,
         )
         if not context_config.get("view"):
             raise ValueError(
@@ -235,6 +260,14 @@ def run_wiki(
             output_dir=layer_dir,
             context_config=context_config,
         )
+        if report.status == "error":
+            raise RuntimeError(
+                f"Layer {layer} failed: {report.error or 'unknown error'}"
+            )
+        if report.status == "discard":
+            raise RuntimeError(
+                f"Layer {layer} discarded: score below discard threshold"
+            )
         if report.output_files:
             previous_wiki_path = report.output_files[0]
         else:
@@ -244,7 +277,7 @@ def run_wiki(
                 if finals:
                     previous_wiki_path = finals[0]
 
-    copied = copy_final_output(previous_wiki_path, resolved_output_dir, domain)
+    copied = copy_final_output(previous_wiki_path, resolved_output_dir, output_name)
     if copied:
         logger.info("Final wiki copied to %s", copied)
     return copied or previous_wiki_path
@@ -257,6 +290,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "domain = index filename = spec domain key\n"
             "layers are discovered from the spec; full runner does not accept --layer or --view\n"
+            "final output is always written under 3. Resource/LLM Knowledge Base/wiki as domain[_filter].md\n"
             "filter grammar:\n"
             '  (field1="value1")+(field2="value2")\n'
             '  (field1="value1")|(field1="value2")\n'
@@ -269,11 +303,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--domain",
         required=True,
         help="Spec domain key and index filename without .base",
-    )
-    parser.add_argument(
-        "--wiki-output-dir",
-        required=True,
-        help="Vault-relative wiki output subdirectory under 3. Resource/LLM Knowledge Base/wiki",
     )
     parser.add_argument(
         "--filter",
@@ -306,9 +335,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional explicit work directory. If omitted, a managed .nanoclaw/wiki-runs path is used.",
     )
     parser.add_argument(
+        "--resume-from-layer",
+        default=None,
+        help="Optional layer name to resume from (e.g. layer2, layer3).",
+    )
+    parser.add_argument(
+        "--resume-file",
+        type=Path,
+        default=None,
+        help="Optional existing markdown file to use as previous layer output when resuming.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Preview layers, views, and filtered document counts without running the model loop",
+    )
+    parser.add_argument(
+        "--force-rebuild",
+        action="store_true",
+        help="Ignore tracker DB state and process all matched docs again.",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     return parser
@@ -338,17 +383,62 @@ def main() -> None:
                 print(f" - {doc}")
         return
 
-    result = run_wiki(
-        domain=args.domain,
-        wiki_output_dir=args.wiki_output_dir,
-        filter_expr=args.filter,
-        vault_root=vault_root,
-        spec_path=spec_path,
-        model=args.model,
-        max_docs=args.max_docs,
-        output_dir=args.output,
+    run_root = (args.output or default_run_root(vault_root, args.domain)).resolve()
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    try:
+        result = run_wiki(
+            domain=args.domain,
+            filter_expr=args.filter,
+            vault_root=vault_root,
+            spec_path=spec_path,
+            model=args.model,
+            max_docs=args.max_docs,
+            output_dir=run_root,
+            resume_from_layer=args.resume_from_layer,
+            resume_file=args.resume_file,
+            force_rebuild=args.force_rebuild,
+        )
+        discard_error: str | None = None
+    except RuntimeError as exc:
+        if "discarded" in str(exc):
+            discard_error = str(exc)
+            result = None
+        else:
+            raise
+
+    # Write report.json at run_root so the workflow engine (index.ts) can parse it
+    if discard_error:
+        report_data = {
+            "status": "discard",
+            "final_score": None,
+            "output_files": [],
+            "run_id": uuid.uuid4().hex,
+            "history": [],
+            "error": discard_error,
+        }
+        (run_root / "report.json").write_text(
+            json.dumps(report_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"Wiki generation discarded: {discard_error}")
+        raise SystemExit(1)
+
+    success = result is not None and result.exists()
+    report_data = {
+        "status": "keep" if success else "error",
+        "final_score": None,
+        "output_files": [str(result)] if success else [],
+        "run_id": uuid.uuid4().hex,
+        "history": [],
+        "error": None if success else "Wiki synthesis failed",
+    }
+    (run_root / "report.json").write_text(
+        json.dumps(report_data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
-    if result and result.exists():
+
+    if success:
         print(f"Wiki generation completed: {result}")
         return
     print("Wiki generation failed")
