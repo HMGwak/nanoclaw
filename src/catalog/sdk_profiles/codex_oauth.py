@@ -34,18 +34,18 @@ _CODEX_HOME_CONFIG = (
 
 
 def _ensure_local_home() -> None:
-    """Create isolated CODEX_HOME directory structure and sync auth."""
+    """Create isolated CODEX_HOME directory and sync auth.json.
+
+    Codex CLI treats CODEX_HOME as the equivalent of `~/.codex` itself
+    (not a parent containing `.codex/`), so files live **directly**
+    under CODEX_HOME: `$CODEX_HOME/auth.json`, `$CODEX_HOME/config.toml`.
+    """
     _CODEX_HOME.mkdir(parents=True, exist_ok=True)
-    (_CODEX_HOME / ".config").mkdir(parents=True, exist_ok=True)
-    (_CODEX_HOME / ".cache").mkdir(parents=True, exist_ok=True)
-    (_CODEX_HOME / ".state").mkdir(parents=True, exist_ok=True)
     _CONFIG_PATH.write_text(_CODEX_HOME_CONFIG, encoding="utf-8")
 
-    # Sync auth.json from real ~/.codex/ to isolated home
+    # Sync auth.json from real ~/.codex/auth.json directly into CODEX_HOME
     real_auth = Path.home() / ".codex" / "auth.json"
-    local_codex_dir = _CODEX_HOME / ".codex"
-    local_codex_dir.mkdir(parents=True, exist_ok=True)
-    local_auth = local_codex_dir / "auth.json"
+    local_auth = _CODEX_HOME / "auth.json"
     if real_auth.exists() and (
         not local_auth.exists()
         or real_auth.stat().st_mtime > local_auth.stat().st_mtime
