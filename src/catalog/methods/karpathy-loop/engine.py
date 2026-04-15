@@ -784,14 +784,43 @@ def run_loop(
         final.total if final else None
     )
 
+    # Karpathy loop rule (2026-04-16): any terminal verdict where best_score
+    # did not reach keep_threshold is a FAILURE, not a soft pass. The loop's
+    # purpose is to raise score until the threshold; if N iterations ran out
+    # or the sequence converged below the target, there is no "partial keep".
+    # Downgrade to discard so run_wiki.py stops the pipeline and the failing
+    # attempt is saved to .discarded/ for inspection only.
+    did_not_reach_target = (
+        status in ("converged", "max_iterations")
+        and best_score is not None
+        and best_score < config.keep_threshold
+    )
+    if did_not_reach_target:
+        logger.warning(
+            "Karpathy loop did not reach keep_threshold: best=%.1f target=%.1f "
+            "after %d iterations (original verdict=%s). Downgrading to discard.",
+            best_score,
+            config.keep_threshold,
+            len(history),
+            status,
+        )
+        status = "discard"
+        if final is not None:
+            final.verdict = "discard"
+            if not final.error:
+                final.error = (
+                    f"Did not reach keep_threshold: best={best_score:.1f} "
+                    f"target={config.keep_threshold:.1f} after {len(history)} iterations"
+                )
+
     # Copy final output — always from the best snapshot, regardless of which
-    # iteration it came from. For discard we still persist the best attempt
-    # under .discarded/ so the run is inspectable.
+    # iteration it came from. Discards still persist the best attempt under
+    # .discarded/ so the run is inspectable, but final_dir stays empty.
     final_dir = output_dir / "final"
     discarded_dir = output_dir / ".discarded"
     snapshot_files = best_files or last_good_files
 
-    if status == "keep" or status == "converged" or status == "max_iterations":
+    if status == "keep":
         final_dir.mkdir(parents=True, exist_ok=True)
         for f in snapshot_files:
             if f.exists():
@@ -821,7 +850,7 @@ def run_loop(
         final_score=final_score,
         output_files=(
             list(final_dir.iterdir())
-            if status in ("keep", "converged", "max_iterations") and final_dir.exists()
+            if status == "keep" and final_dir.exists()
             else []
         ),
         history=history,

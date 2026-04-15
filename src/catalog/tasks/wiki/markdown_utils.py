@@ -411,6 +411,43 @@ def _extract_filter_pairs(filter_expr: str | None) -> list[tuple[str, str]]:
     return re.findall(r'([A-Za-z0-9_가-힣]+)\s*=\s*"([^"]+)"', filter_expr)
 
 
+def inject_frontmatter_field(content: str, key: str, value: str) -> str:
+    """Insert or update a scalar field in the YAML frontmatter of a markdown
+    document. Preserves existing fields and their order.
+
+    If the document has no frontmatter, one is created with just this field.
+    If the key already exists, its value is replaced in place. If the key is
+    absent, it is appended before the closing `---`.
+    """
+    lines = content.split("\n")
+    new_line = f"{key}: {value}"
+
+    if not lines or lines[0].strip() != "---":
+        # No frontmatter — create a minimal one at the top.
+        return f"---\n{new_line}\n---\n\n{content}"
+
+    end_idx: int | None = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            end_idx = i
+            break
+    if end_idx is None:
+        # Malformed frontmatter (opening `---` with no closing). Leave the
+        # content untouched rather than corrupt it.
+        return content
+
+    key_pattern = re.compile(rf"^\s*{re.escape(key)}\s*:")
+    for i in range(1, end_idx):
+        if key_pattern.match(lines[i]):
+            lines[i] = new_line
+            break
+    else:
+        # Key not found — insert just before the closing `---`.
+        lines.insert(end_idx, new_line)
+
+    return "\n".join(lines)
+
+
 def normalize_wikilink_footnote_targets(content: str) -> str:
     lines: list[str] = []
     for line in content.split("\n"):

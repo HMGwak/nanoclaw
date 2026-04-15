@@ -222,6 +222,7 @@ def run_wiki(
     previous_wiki_path: Path | None = (
         resume_file if resume_file and resume_file.exists() else None
     )
+    last_final_score: float | None = None
     layers = list(domain_assets["layers"])
     if resume_from_layer:
         if resume_from_layer not in layers:
@@ -265,9 +266,10 @@ def run_wiki(
                 f"Layer {layer} failed: {report.error or 'unknown error'}"
             )
         if report.status == "discard":
-            raise RuntimeError(
-                f"Layer {layer} discarded: score below discard threshold"
-            )
+            reason = report.error or "score below discard threshold"
+            raise RuntimeError(f"Layer {layer} discarded: {reason}")
+        if report.final_score is not None:
+            last_final_score = report.final_score
         if report.output_files:
             previous_wiki_path = report.output_files[0]
         else:
@@ -280,6 +282,26 @@ def run_wiki(
     copied = copy_final_output(previous_wiki_path, resolved_output_dir, output_name)
     if copied:
         logger.info("Final wiki copied to %s", copied)
+        if last_final_score is not None:
+            try:
+                from catalog.tasks.wiki.markdown_utils import inject_frontmatter_field
+            except ImportError:
+                from markdown_utils import inject_frontmatter_field  # type: ignore[no-redef]
+            try:
+                current = copied.read_text(encoding="utf-8")
+                updated = inject_frontmatter_field(
+                    current, "quality_score", f"{last_final_score:.1f}"
+                )
+                copied.write_text(updated, encoding="utf-8")
+                logger.info(
+                    "Stamped quality_score=%.1f into %s frontmatter",
+                    last_final_score,
+                    copied.name,
+                )
+            except OSError as exc:
+                logger.warning(
+                    "Failed to stamp quality_score into %s: %s", copied, exc
+                )
     return copied or previous_wiki_path
 
 
