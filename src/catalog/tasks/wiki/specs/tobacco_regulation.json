@@ -187,7 +187,10 @@
       }
     }
   },
-  "shared_prompt_rules": {},
+  "shared_prompt_rules": {
+    "extract": "## 공통 추출 규칙 (모든 레이어 적용)\n- doc_id는 반드시 파일의 frontmatter에 있는 `doc_id` 필드 값을 그대로 복사할 것. 약어, 문서 제목, 또는 임의 식별자로 바꾸지 말 것.\n- 목록 파일에 나열된 문서만 읽을 것. 다른 파일을 탐색하거나 읽지 말 것.\n- 모든 claim의 doc_id는 목록 파일의 파일명과 정확히 일치해야 한다.\n",
+    "compose": "## 공통 작성 규칙 (모든 레이어 적용)\n- 모든 substantive content는 반드시 bullet (`- ...[^N]`) 형식. plain paragraph 금지 (canonical empty marker 제외).\n- 근거 자료가 없는 섹션은 canonical empty marker를 유지. 분량 균형을 위해 내용을 만들어내지 말 것.\n- 같은 source에서 동일 주장을 반복하는 bullet 금지. 유사 bullet은 구체적 차이가 있을 때만 허용.\n"
+  },
   "runner": {
     "vault_root_default": "~/Documents/Mywork",
     "index_root": "3. Resource/LLM Knowledge Base/index",
