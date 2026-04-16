@@ -784,23 +784,27 @@ def run_loop(
         final.total if final else None
     )
 
-    # Karpathy loop rule (2026-04-16): any terminal verdict where best_score
-    # did not reach keep_threshold is a FAILURE, not a soft pass. The loop's
-    # purpose is to raise score until the threshold; if N iterations ran out
-    # or the sequence converged below the target, there is no "partial keep".
-    # Downgrade to discard so run_wiki.py stops the pipeline and the failing
-    # attempt is saved to .discarded/ for inspection only.
-    did_not_reach_target = (
+    # Two-threshold Karpathy loop rule:
+    # - keep_threshold (e.g. 85): loop TARGET — iterate until this score
+    # - discard_threshold (e.g. 70): absolute FLOOR — below this = garbage
+    #
+    # If max_iterations/converged AND best >= discard but < keep:
+    #   → accepted as "best effort" (file saved, pipeline continues)
+    # If best < discard: → true discard (garbage, pipeline stops)
+    #
+    # This avoids the all-or-nothing trap where strict keep_threshold
+    # discards every run that didn't hit 85, even with a useful 78.
+    did_not_reach_floor = (
         status in ("converged", "max_iterations")
         and best_score is not None
-        and best_score < config.keep_threshold
+        and best_score < config.discard_threshold
     )
-    if did_not_reach_target:
+    if did_not_reach_floor:
         logger.warning(
-            "Karpathy loop did not reach keep_threshold: best=%.1f target=%.1f "
+            "Karpathy loop below discard_threshold: best=%.1f floor=%.1f "
             "after %d iterations (original verdict=%s). Downgrading to discard.",
             best_score,
-            config.keep_threshold,
+            config.discard_threshold,
             len(history),
             status,
         )
@@ -809,8 +813,8 @@ def run_loop(
             final.verdict = "discard"
             if not final.error:
                 final.error = (
-                    f"Did not reach keep_threshold: best={best_score:.1f} "
-                    f"target={config.keep_threshold:.1f} after {len(history)} iterations"
+                    f"Below discard_threshold: best={best_score:.1f} "
+                    f"floor={config.discard_threshold:.1f} after {len(history)} iterations"
                 )
 
     # Copy final output — always from the best snapshot, regardless of which

@@ -307,9 +307,9 @@
       "evaluation": {
         "version": "v3",
         "loop": {
-          "max_iterations": 3,
-          "keep_threshold": 70.0,
-          "discard_threshold": 55,
+          "max_iterations": 5,
+          "keep_threshold": 85.0,
+          "discard_threshold": 70.0,
           "convergence_delta": 3
         },
         "scoring": {
@@ -615,9 +615,9 @@
       "evaluation": {
         "version": "v1",
         "loop": {
-          "max_iterations": 3,
-          "keep_threshold": 70.0,
-          "discard_threshold": 55,
+          "max_iterations": 5,
+          "keep_threshold": 85.0,
+          "discard_threshold": 70.0,
           "convergence_delta": 3
         },
         "scoring": {
@@ -742,9 +742,9 @@
       "evaluation": {
         "version": "v2",
         "loop": {
-          "max_iterations": 3,
-          "keep_threshold": 70.0,
-          "discard_threshold": 55,
+          "max_iterations": 5,
+          "keep_threshold": 85.0,
+          "discard_threshold": 70.0,
           "convergence_delta": 3
         },
         "scoring": {
