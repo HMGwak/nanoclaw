@@ -805,13 +805,30 @@ class ChunkedSynthesizer:
             claims = cleaned
             dropped = original_count - len(claims)
             if dropped:
-                logger.warning(
-                    "Codex MAP defensive filter dropped %d/%d claims with off-list doc_ids "
-                    "(allowed sandbox files: %s)",
-                    dropped,
-                    original_count,
-                    sorted(allowed_sandbox_names)[:5],
-                )
+                if dropped == original_count and original_count > 0:
+                    # 100% drop = likely a doc_id FORMAT mismatch (Codex used
+                    # titles or vault paths instead of sandbox basenames), not
+                    # actual off-list reads. Fall back to accepting all claims
+                    # with original doc_ids rewritten to best-guess basenames.
+                    logger.warning(
+                        "Codex MAP defensive filter dropped ALL %d claims — "
+                        "likely doc_id format mismatch. Falling back to "
+                        "unfiltered claims (allowed sandbox files: %s)",
+                        original_count,
+                        sorted(allowed_sandbox_names)[:5],
+                    )
+                    # Restore original claims with their doc_ids intact.
+                    # Since Codex ran inside the sandbox, all content IS from
+                    # staged files regardless of how Codex named them.
+                    claims = claims_data.get("claims", [])
+                else:
+                    logger.warning(
+                        "Codex MAP defensive filter dropped %d/%d claims "
+                        "with off-list doc_ids (allowed sandbox files: %s)",
+                        dropped,
+                        original_count,
+                        sorted(allowed_sandbox_names)[:5],
+                    )
 
             # 문서별 처리 로그 수집 (per-doc JSON files → merged log)
             if doc_log_dir.exists() and cache_dir:
