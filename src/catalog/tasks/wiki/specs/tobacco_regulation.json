@@ -308,7 +308,7 @@
         "version": "v3",
         "loop": {
           "max_iterations": 3,
-          "keep_threshold": 80.0,
+          "keep_threshold": 75.0,
           "discard_threshold": 55,
           "convergence_delta": 3
         },
@@ -616,7 +616,7 @@
         "version": "v1",
         "loop": {
           "max_iterations": 3,
-          "keep_threshold": 82.0,
+          "keep_threshold": 77.0,
           "discard_threshold": 55,
           "convergence_delta": 3
         },
@@ -743,7 +743,7 @@
         "version": "v2",
         "loop": {
           "max_iterations": 3,
-          "keep_threshold": 78.0,
+          "keep_threshold": 72.0,
           "discard_threshold": 55,
           "convergence_delta": 3
         },
