@@ -824,15 +824,20 @@ def run_loop(
     discarded_dir = output_dir / ".discarded"
     snapshot_files = best_files or last_good_files
 
-    if status == "keep":
+    # Copy to final_dir for any non-discard, non-error terminal status.
+    # After the did_not_reach_floor downgrade above, any remaining
+    # converged/max_iterations has best >= discard_threshold and is
+    # acceptable output (even if it didn't reach keep_threshold).
+    if status in ("keep", "converged", "max_iterations"):
         final_dir.mkdir(parents=True, exist_ok=True)
         for f in snapshot_files:
             if f.exists():
                 shutil.copy2(f, final_dir / f.name)
         logger.info(
-            "Final output from best iteration=%d score=%.1f",
+            "Final output from best iteration=%d score=%.1f (status=%s)",
             best_iteration,
             best_score if best_score is not None else 0.0,
+            status,
         )
 
         # Record to DB only after successful verdict
@@ -854,7 +859,7 @@ def run_loop(
         final_score=final_score,
         output_files=(
             list(final_dir.iterdir())
-            if status == "keep" and final_dir.exists()
+            if status in ("keep", "converged", "max_iterations") and final_dir.exists()
             else []
         ),
         history=history,
