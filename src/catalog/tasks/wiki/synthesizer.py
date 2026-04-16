@@ -42,6 +42,7 @@ try:
         filter_attachment_footnotes,
         merge_missing_footnote_definitions,
         dedup_footnotes_by_source,
+        inject_frontmatter_field,
         canonicalize_regulation_markdown,
         preserve_canonical_subtrees,
         md_to_json,
@@ -59,6 +60,7 @@ except ImportError:
         filter_attachment_footnotes,
         merge_missing_footnote_definitions,
         dedup_footnotes_by_source,
+        inject_frontmatter_field,
         canonicalize_regulation_markdown,
         preserve_canonical_subtrees,
         md_to_json,
@@ -279,7 +281,7 @@ Atomic Claim 추출 원칙 (핵심):
 - **item_legal_basis**: 각 items[i]에 해당하는 법적 근거 배열. items와 같은 길이. 각 item이 어떤 법 조항에서 유래했는지 정확히 기록.
 - **legal_basis**: 주제 전체의 법률 약어 + 조항 번호 형식. 문서에 명시된 것만.
 - **quote**: 원문 핵심 구문 1-3문장 (원문 언어 그대로, 최대 500자)
-- **doc_id**: 파일명 (여러 문서 해당 시 세미콜론 연결)
+- **doc_id**: 파일의 frontmatter에 있는 `doc_id` 필드 값을 그대로 복사. 없으면 파일명 사용. 약어나 문서 제목으로 바꾸지 말 것.
 - **section_target**: wiki 섹션 — 아래 중 선택:
   - `## 규제 환경 요약`
   - `## 첨가물정보제출 > ### 규제 요건` / `### 신규제출` / `### 변경제출` / `### 정기제출`
@@ -685,7 +687,13 @@ class ChunkedSynthesizer:
             sb_name = base if base not in sandbox_docs else f"{i:03d}_{base}"
             dst = sandbox_root / sb_name
             try:
-                dst.write_bytes(src.read_bytes())
+                # Inject doc_id into frontmatter so Codex uses the EXACT
+                # sandbox filename as the claim doc_id. Without this, Codex
+                # sometimes invents abbreviations or titles, causing the
+                # runtime doc_id filter to drop valid claims.
+                content = src.read_text(encoding="utf-8")
+                content = inject_frontmatter_field(content, "doc_id", sb_name)
+                dst.write_text(content, encoding="utf-8")
                 sandbox_docs[sb_name] = src
             except OSError as exc:
                 logger.warning(
@@ -805,30 +813,20 @@ class ChunkedSynthesizer:
             claims = cleaned
             dropped = original_count - len(claims)
             if dropped:
-                if dropped == original_count and original_count > 0:
-                    # 100% drop = likely a doc_id FORMAT mismatch (Codex used
-                    # titles or vault paths instead of sandbox basenames), not
-                    # actual off-list reads. Fall back to accepting all claims
-                    # with original doc_ids rewritten to best-guess basenames.
-                    logger.warning(
-                        "Codex MAP defensive filter dropped ALL %d claims — "
-                        "likely doc_id format mismatch. Falling back to "
-                        "unfiltered claims (allowed sandbox files: %s)",
-                        original_count,
-                        sorted(allowed_sandbox_names)[:5],
-                    )
-                    # Restore original claims with their doc_ids intact.
-                    # Since Codex ran inside the sandbox, all content IS from
-                    # staged files regardless of how Codex named them.
-                    claims = claims_data.get("claims", [])
-                else:
-                    logger.warning(
-                        "Codex MAP defensive filter dropped %d/%d claims "
-                        "with off-list doc_ids (allowed sandbox files: %s)",
-                        dropped,
-                        original_count,
-                        sorted(allowed_sandbox_names)[:5],
-                    )
+                # Log ALL dropped doc_ids so we can diagnose format mismatches
+                dropped_ids = [
+                    c.get("doc_id", "?")
+                    for c in claims_data.get("claims", [])
+                    if _resolve_doc_id(c.get("doc_id")) is None
+                ]
+                logger.warning(
+                    "Codex MAP defensive filter dropped %d/%d claims. "
+                    "allowed sandbox files: %s | dropped doc_ids: %s",
+                    dropped,
+                    original_count,
+                    sorted(allowed_sandbox_names)[:5],
+                    dropped_ids[:5],
+                )
 
             # 문서별 처리 로그 수집 (per-doc JSON files → merged log)
             if doc_log_dir.exists() and cache_dir:
